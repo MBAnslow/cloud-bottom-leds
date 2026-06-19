@@ -91,8 +91,10 @@ export const fragmentShader = /* glsl */ `
     // Each LED spreads its flux as a flux-conserving 2D gaussian on the
     // diffuser (normalised so total energy is constant): moving LEDs back
     // widens the spot AND lowers its peak, evening the light out.
-    float sx = max(0.03, uSigma.x);
-    float sy = max(0.03, uSigma.y);
+    // Only a tiny numerical epsilon to avoid divide-by-zero below; the real
+    // (round-preserving) floor is applied as a scalar in mm on the CPU side.
+    float sx = max(1e-4, uSigma.x);
+    float sy = max(1e-4, uSigma.y);
     float coeff = uLedGain / (6.2831853 * sx * sy);
     vec3 light = vec3(0.0);
 

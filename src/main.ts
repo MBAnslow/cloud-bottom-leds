@@ -44,12 +44,20 @@ function pitchYmm(): number {
 const SIGMA_MAX = 3.0;
 function computeSigma(out: THREE.Vector2) {
   const led = getLedType(cfg.ledType);
-  // Light spread is isotropic in millimetres; per-axis cell sigma differs only
-  // because the pitch differs. (When drawn on the correctly-proportioned panel
-  // the spot is still round; only the overlap with neighbours changes.)
-  const sigmaMm = Math.hypot(cfg.ledDistanceMm * led.spreadCoeff, cfg.diffuserScatterMm);
-  let sx = Math.max(0.03, sigmaMm / pitchXmm());
-  let sy = Math.max(0.03, sigmaMm / pitchYmm());
+  // Light spread is isotropic in millimetres. The spot can't be smaller than the
+  // LED's own emitting die, so floor the spread as a single SCALAR in mm. Doing
+  // the floor here (not per-axis on sx/sy) is critical: flooring sx and sy
+  // independently would lift only the small-sigma axis at low haze and stretch
+  // the spot into an oval. A scalar floor keeps it perfectly round.
+  const minSigmaMm = Math.max(0.5, led.ledSizeMm * 0.25);
+  const sigmaMm = Math.max(
+    minSigmaMm,
+    Math.hypot(cfg.ledDistanceMm * led.spreadCoeff, cfg.diffuserScatterMm)
+  );
+  // Per-axis cell sigma differs only because the pitch differs; on the
+  // correctly-proportioned panel the spot still renders round.
+  let sx = sigmaMm / pitchXmm();
+  let sy = sigmaMm / pitchYmm();
   // Clamp both axes by the SAME factor so the rendered blob never stretches
   // (scaling both equally preserves the round shape in screen space).
   const peak = Math.max(sx, sy);
