@@ -52,6 +52,22 @@ export interface Config {
   /** Background tint behind the cloud. */
   backgroundTint: number;
 
+  // --- Breathing (per-partition underlying pulse) ---
+  /** Master on/off for the breathing layer. */
+  breatheEnabled: boolean;
+  /** Number of vertical partitions across the width (2..6). */
+  partitions: number;
+  /** Breaths per minute (pulse rate). */
+  breatheRate: number;
+  /** Depth of the pulse 0..1 (how far it dims at the trough). */
+  breatheDepth: number;
+  /** How strongly each partition's base colour tints the pattern 0..1. */
+  breatheMix: number;
+  /** Phase spread across partitions 0..1 (0 = all in sync, 1 = a full cycle). */
+  breatheStagger: number;
+  /** Base colour per partition (hex sRGB), index 0..5. */
+  breatheColors: string[];
+
   // --- Streaming to real hardware ---
   streamEnabled: boolean;
   /** WebSocket URL of the local bridge server. */
@@ -113,6 +129,14 @@ export const defaultConfig: Config = {
 
   ambient: 0.04,
   backgroundTint: 0.02,
+
+  breatheEnabled: true,
+  partitions: 3,
+  breatheRate: 7,
+  breatheDepth: 0.7,
+  breatheMix: 0.5,
+  breatheStagger: 0.25,
+  breatheColors: ["#3aa0ff", "#ff5d8f", "#ffd166", "#06d6a0", "#b08cff", "#ff8c42"],
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",

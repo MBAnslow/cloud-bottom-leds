@@ -6,6 +6,8 @@ import { fragmentShader, vertexShader } from "./cloudShader";
 import { Streamer, type StreamStatus } from "./streamer";
 import { buildGui, type BuildEstimate } from "./gui";
 import { getLedType, maxGrid } from "./ledTypes";
+import { applyBreathing } from "./breathing";
+import { BreatheViz } from "./breatheViz";
 
 const cfg: Config = { ...defaultConfig };
 
@@ -186,6 +188,12 @@ function onResize() {
 window.addEventListener("resize", onResize);
 onResize();
 
+// --- Breathing oscilloscope (left panel) ---
+const breathePanel = document.getElementById("breathe-panel")!;
+const breatheViz = new BreatheViz(
+  document.getElementById("breathe-viz") as HTMLCanvasElement
+);
+
 // --- HUD ---
 const hudGrid = document.getElementById("hud-grid")!;
 const hudFps = document.getElementById("hud-fps")!;
@@ -227,6 +235,9 @@ function frame() {
     patternTime += step;
     patternAccum -= step;
     renderPattern(ledField.colors, patternTime, step, cfg);
+    // Bake the per-partition breathing pulse onto the same buffer, so the
+    // visual and the streamed hardware frames stay identical.
+    applyBreathing(ledField.colors, patternTime, cfg);
     dirty = true;
     steps++;
   }
@@ -247,6 +258,10 @@ function frame() {
   uniforms.uAmbient.value = cfg.ambient;
   uniforms.uBackground.value = cfg.backgroundTint;
   renderer.render(scene, camera);
+
+  // breathing readout on the left
+  breathePanel.classList.toggle("hidden", !cfg.breatheEnabled);
+  if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime);
 
   // 3) stream to hardware at the configured data rate
   if (cfg.streamEnabled && streamer.isOpen && dirty) {
