@@ -55,8 +55,14 @@ export interface Config {
   // --- Breathing (per-partition underlying pulse) ---
   /** Master on/off for the breathing layer. */
   breatheEnabled: boolean;
-  /** Number of vertical partitions across the width (2..6). */
+  /** Number of partitions (2..6). */
   partitions: number;
+  /** How the space is divided into partitions. */
+  partitionLayout: PartitionLayout;
+  /** Edge softness / overlap between partitions: 0 = hard borders, 1 = heavy blend. */
+  partitionSoftness: number;
+  /** Random seed for the scatter-based layouts (voronoi, gaussian). */
+  partitionSeed: number;
   /** Breaths per minute (pulse rate). */
   breatheRate: number;
   /** Depth of the pulse 0..1 (how far it dims at the trough). */
@@ -81,6 +87,23 @@ export interface Config {
   /** Max frames/sec sent to hardware (visual still runs at full rate). */
   streamFps: number;
 }
+
+export type PartitionLayout =
+  | "columns"
+  | "rows"
+  | "diagonal"
+  | "rings"
+  | "voronoi"
+  | "gaussian";
+
+export const PARTITION_LAYOUTS: PartitionLayout[] = [
+  "columns",
+  "rows",
+  "diagonal",
+  "rings",
+  "voronoi",
+  "gaussian",
+];
 
 export type PatternName =
   | "plasma"
@@ -132,6 +155,9 @@ export const defaultConfig: Config = {
 
   breatheEnabled: true,
   partitions: 3,
+  partitionLayout: "columns",
+  partitionSoftness: 0.35,
+  partitionSeed: 1,
   breatheRate: 7,
   breatheDepth: 0.7,
   breatheMix: 0.5,

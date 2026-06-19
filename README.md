@@ -46,11 +46,15 @@ preview predicts what the real installation will look like.
   detail). Thicker bumps block more light. Only the LEDs animate.
 - **Patterns** — plasma, rainbow waves, twinkle, fire, aurora drift, breathe,
   rain, solid. Plus speed, content level, and hue-shift.
-- **Breathing** — split the cloud into 2–6 vertical partitions, each with its
-  own base colour and a slow, phase-staggered "breathe" pulse that mixes with
-  whatever pattern is running (the pulse is baked into the LED buffer, so the
-  preview and the streamed hardware stay identical). A left-hand oscilloscope
-  shows each partition's breathing waveform live, in its base colour.
+- **Breathing** — split the cloud into 2–6 partitions, each with its own base
+  colour and a slow, phase-staggered "breathe" pulse that mixes with whatever
+  pattern is running (the pulse is baked into the LED buffer, so the preview and
+  the streamed hardware stay identical). Choose how the space is divided —
+  `columns`, `rows`, `diagonal`, `rings`, `voronoi` cells, or `gaussian` blobs —
+  and an `overlap` control sets how soft the borders are (0 = hard edges, higher
+  = partitions blend into each other with no hard boundary). `reshuffle shapes`
+  re-randomises the voronoi/gaussian placement. A left-hand oscilloscope shows
+  each partition's breathing waveform live, in its base colour.
 
 The controls are grouped into three menus: **Hardware** (cloud size, LED grid,
 build estimate, diffuser, streaming), **Pattern** (the animated content and the

@@ -1,5 +1,5 @@
 import GUI, { type Controller } from "lil-gui";
-import { PATTERN_NAMES, type Config } from "./config";
+import { PATTERN_NAMES, PARTITION_LAYOUTS, type Config } from "./config";
 import { LED_TYPES, maxGrid } from "./ledTypes";
 import { partitionCount } from "./breathing";
 
@@ -129,6 +129,14 @@ export function buildGui(cfg: Config, estimate: BuildEstimate, hooks: GuiHooks):
   const br = gui.addFolder("Breathing");
   br.add(cfg, "breatheEnabled").name("enable");
   br.add(cfg, "partitions", 2, 6, 1).name("partitions").onChange(rebuildColors);
+  br.add(cfg, "partitionLayout", PARTITION_LAYOUTS).name("layout");
+  br.add(cfg, "partitionSoftness", 0, 1, 0.01).name("overlap (soft edges)");
+  const reshuffle = {
+    go: () => {
+      cfg.partitionSeed = (Math.random() * 1e6) | 0;
+    },
+  };
+  br.add(reshuffle, "go").name("reshuffle shapes");
   br.add(cfg, "breatheRate", 1, 30, 0.5).name("rate (per min)");
   br.add(cfg, "breatheDepth", 0, 1, 0.01).name("depth");
   br.add(cfg, "breatheMix", 0, 1, 0.01).name("colour mix");
