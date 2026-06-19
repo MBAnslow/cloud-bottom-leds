@@ -1,0 +1,123 @@
+export type WiringOrder = "row-major" | "serpentine";
+
+export interface Config {
+  // --- Cloud dimensions (physical) ---
+  /** Overall width of the cloud surface, in millimetres. */
+  cloudWidthMm: number;
+  /** Overall height of the cloud surface, in millimetres. */
+  cloudHeightMm: number;
+
+  // --- LED grid ---
+  /** Number of LED rows (strips), spread evenly over the height. */
+  rows: number;
+  /** Number of LEDs per row, spread evenly over the width. */
+  cols: number;
+  /** Selected LED product id (see ledTypes.ts). */
+  ledType: string;
+
+  // --- Emitter (physical) ---
+  /** Relative luminous output / drive level of each LED (1 = nominal). Higher = brighter, can blow out to white hotspots. */
+  ledBrightness: number;
+  /** How many times per second the lighting pattern actually updates (controller refresh of the animation). */
+  patternFps: number;
+
+  // --- Diffuser (physical) ---
+  /** Distance from the LEDs to the back of the diffuser, in millimetres. Larger = softer, more even, dimmer hotspots. */
+  ledDistanceMm: number;
+  /** Intrinsic blur of the diffuser material itself (haze), in millimetres, independent of distance. */
+  diffuserScatterMm: number;
+  /** Diffuser opacity as a percentage of light blocked (0 = clear, 100 = opaque). Transmittance = 1 - opacity. */
+  opacity: number;
+
+  // --- Cloud surface shape ---
+  /** Height/strength of the cloud bumps (also modulates local thickness/transmission). */
+  bumpHeight: number;
+  /** Spatial frequency of the bumps (bigger = smaller, denser bumps). */
+  bumpScale: number;
+  /** Octaves of fbm noise used for the cloud shape. */
+  bumpDetail: number;
+
+  // --- Pattern ---
+  pattern: PatternName;
+  /** Animation speed multiplier. */
+  speed: number;
+  /** Pattern content level 0..1 (the color values, applied to both visual + hardware output). */
+  brightness: number;
+  /** Color palette hue offset in degrees. */
+  hueShift: number;
+
+  // --- Look ---
+  /** Ambient base glow of the surface even with LEDs dark. */
+  ambient: number;
+  /** Background tint behind the cloud. */
+  backgroundTint: number;
+
+  // --- Streaming to real hardware ---
+  streamEnabled: boolean;
+  /** WebSocket URL of the local bridge server. */
+  bridgeUrl: string;
+  /** Target WLED controller IP. */
+  wledHost: string;
+  /** WLED real-time UDP port (default 21324). */
+  wledPort: number;
+  /** Physical strip wiring order so the visual maps correctly to hardware. */
+  wiring: WiringOrder;
+  /** Max frames/sec sent to hardware (visual still runs at full rate). */
+  streamFps: number;
+}
+
+export type PatternName =
+  | "plasma"
+  | "rainbowWaves"
+  | "twinkle"
+  | "fire"
+  | "auroraDrift"
+  | "breathe"
+  | "rain"
+  | "solid";
+
+export const PATTERN_NAMES: PatternName[] = [
+  "plasma",
+  "rainbowWaves",
+  "twinkle",
+  "fire",
+  "auroraDrift",
+  "breathe",
+  "rain",
+  "solid",
+];
+
+export const defaultConfig: Config = {
+  cloudWidthMm: 1200,
+  cloudHeightMm: 600,
+
+  rows: 8,
+  cols: 16,
+  ledType: "ws2812b-60",
+
+  ledBrightness: 2.0,
+  patternFps: 60,
+
+  ledDistanceMm: 40,
+  diffuserScatterMm: 6,
+  opacity: 35,
+
+  bumpHeight: 0.55,
+  bumpScale: 2.4,
+  bumpDetail: 4,
+
+  pattern: "auroraDrift",
+  speed: 1.0,
+  brightness: 0.9,
+  hueShift: 0,
+
+  ambient: 0.04,
+  backgroundTint: 0.02,
+
+  streamEnabled: false,
+  bridgeUrl: "ws://localhost:8081",
+  wledHost: "192.168.1.50",
+  wledPort: 21324,
+  wiring: "serpentine",
+  streamFps: 40,
+};

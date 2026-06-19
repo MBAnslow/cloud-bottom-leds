@@ -1,0 +1,28 @@
+{
+  "name": "cloud-bottom-leds",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Simulate LED-strip lighting patterns behind a bumpy, diffuse cloud surface and stream them live to real WLED strips.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "server": "node server/index.mjs",
+    "start": "npm run server"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "lil-gui": "^0.19.2",
+    "three": "^0.165.0",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.165.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  }
+}
