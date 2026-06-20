@@ -33,9 +33,6 @@ preview predicts what the real installation will look like.
   overlapping through the diffuser, which is expected and desirable. The light
   spot itself is modeled as an isotropic (round) spread in millimetres — only
   the overlap with neighbours changes with pitch, the dot never stretches.
-- **Build estimate** — a live read-out of total LEDs, derived pitch, the LED/m
-  density needed along each row, how much strip (or how many nodes) to buy, and
-  whether that's feasible with the chosen product. This is how you size the order.
 - **LEDs (physical)** — brightness/drive gain (bright + close + clear = white
   hotspots; dim = soft colored dots) and the pattern update rate in fps (the
   controller's animation refresh — see how choppy 15 fps looks vs 60).
@@ -45,20 +42,53 @@ preview predicts what the real installation will look like.
 - **Cloud surface** — a static, bumpy physical surface (bumpiness, scale,
   detail). Thicker bumps block more light. Only the LEDs animate.
 - **Patterns** — plasma, rainbow waves, twinkle, fire, aurora drift, breathe,
-  rain, solid. Plus speed, content level, and hue-shift.
+  rain, solid. Plus speed, content level, and hue-shift. `enable pattern` can be
+  turned off to show the breathing layer on its own (the pattern becomes a black
+  backdrop).
 - **Breathing** — split the cloud into 2–6 partitions, each with its own base
-  colour and a slow, phase-staggered "breathe" pulse that mixes with whatever
+  colour and a slow, phase-staggered "breathe" pulse layered over whatever
   pattern is running (the pulse is baked into the LED buffer, so the preview and
   the streamed hardware stay identical). Choose how the space is divided —
-  `columns`, `rows`, `diagonal`, `rings`, `voronoi` cells, or `gaussian` blobs —
-  and an `overlap` control sets how soft the borders are (0 = hard edges, higher
-  = partitions blend into each other with no hard boundary). `reshuffle shapes`
-  re-randomises the voronoi/gaussian placement. A left-hand oscilloscope shows
-  each partition's breathing waveform live, in its base colour.
+  `columns`, `rows`, `diagonal`, `rings`, `voronoi` cells, `gaussian` blobs, or
+  `mask` (see below) — and an `overlap (soft edges)` control sets how soft the
+  borders are (0 = hard edges, higher = partitions blend into each other with no
+  hard boundary). The overlap control also feathers `mask` layouts: 0 is a hard
+  cut at the mask's mid-grey, higher values fade the mask edge out. `reshuffle /
+  move shapes` re-randomises the voronoi/gaussian/mask placement, and
+  `rate` / `depth` / `stagger` set the pulse. A bottom-centre oscilloscope shows
+  each partition's breathing waveform live, in its base colour — **hover a lane**
+  (P1, P2, …) to solo that partition on the cloud: pattern off and every other
+  partition off, so you see just that one partition's breathing contribution.
+- **Mask layout** — a partition layout driven by an image you upload *or draw*.
+  The same greyscale image is placed at a *different centre for each partition
+  (breath)*; the image's bright areas are where that colour lives, dark areas are
+  absent, with smooth gradients in between — so it supports arbitrary,
+  discontinuous shapes. Where no mask covers an LED it simply doesn't breathe (the
+  plain pattern shows through); where masks overlap, the colours mix. `upload
+  mask…` loads an image and selects the layout automatically; the **draw mask**
+  grid lets you paint your own — left-drag to paint, toggle `draw`/`erase` (or
+  hold Shift / right-drag to erase), `clear` to wipe — and every stroke updates
+  the live mask. `scale` resizes the mask over the scene (its own aspect ratio is
+  preserved, so a round mask stays round); `invert` flips which tones are "on";
+  `show masks` superimposes the tinted masks over their positions in the scene
+  (with centre markers and P-labels) so you can see exactly where each colour
+  sits; `clear mask` removes it.
+- **Blending** — its own menu, controlling how the layers combine.
+  `oscillators with each other` sets how overlapping partition pulses merge
+  (`average` weighted mean, `additive` so overlaps brighten, `lighten` keeps the
+  brightest, or `screen` for a softer brighten). `breathing with pattern` is the
+  standard graphics layer blend mode for the combined breathing layer over the
+  pattern (`normal`, `additive`, `screen`, `multiply`, `lighten`, `darken`,
+  `overlay`, `softLight`, `difference`), and `breath opacity` controls how
+  strongly that layer shows.
 
-The controls are grouped into three menus: **Hardware** (cloud size, LED grid,
-build estimate, diffuser, streaming), **Pattern** (the animated content and the
-cloud surface look), and **Breathing** (partitions, rate/depth/mix, base colours).
+The controls are split into two side menus: on the **right**, **Hardware**
+(cloud size, LED grid, diffuser, streaming); on the **left**, **Pattern** (the
+animated content and the cloud surface look), **Breathing** (layout/mask,
+overlap, rate/depth/stagger), and **Blending** (oscillator + pattern blend
+modes, breath opacity). The LED cloud sits centred between them, and the
+breathing oscilloscope runs along the bottom centre — the **partition count**
+and the **per-partition colours** live right there in the oscilloscope panel.
 - **Live hardware streaming** — pushes frames to a [WLED](https://kno.wled.ge/)
   controller over its real-time UDP protocol (DNRGB), with serpentine or
   row-major wiring and a configurable frame rate.
@@ -95,14 +125,15 @@ horizontal banding appear before the LEDs merge sideways (as is typical).
 A practical workflow:
 
 1. Set the **cloud dimensions** to your real surface size.
-2. Pick an **LED type** and adjust **rows / cols** until the *Build Estimate*
-   shows a density your chosen product can hit (feasibility reads "OK").
+2. Pick an **LED type** and adjust **rows / cols** — the rows/cols are capped to
+   what physically fits, so you can't exceed your chosen product's density.
 3. Set the **brightness** you'll actually drive at.
 4. Increase **LED distance** until the HUD reads "even" — that's the minimum
    standoff depth you need to build behind the cloud to hide the hotspots.
 
-Read off the *Build Estimate* for the order: total LEDs and metres of strip
-(or number of pixel nodes) to buy.
+The top HUD shows the live grid, cloud size in cm, **total LED count**, and the
+spread-to-pitch ratio (`hotspots` / `soft dots` / `even`) — read off the total
+LED count for how many LEDs / metres of strip to buy.
 
 ## Stack
 
@@ -138,7 +169,7 @@ DIY ecosystem.
    wiring direction. (You can also configure the 2D matrix in WLED's settings.)
 3. Find the controller's IP address (WLED app or your router).
 4. Run the bridge: `npm run server`.
-5. In the simulator's **Stream to Hardware** panel:
+5. In the simulator's **Stream (WLED)** panel (under Hardware):
    - set **WLED IP** to your controller's address,
    - set **wiring** to `serpentine` if alternate rows are reversed (typical for
      a boustrophedon strip layout), otherwise `row-major`,
@@ -168,14 +199,20 @@ stop). Brightness and gamma are applied before sending.
 ## Project layout
 
 ```
-index.html            # canvas + HUD
+index.html            # canvas + HUD + breathing oscilloscope panel
 src/
-  config.ts           # all tunable parameters + defaults
+  config.ts           # all tunable parameters + defaults (blend mode lists)
   patterns.ts         # pattern engine (source of truth for LED colors)
+  breathing.ts        # partition weights + breathing layer compositing
+  mask.ts             # mask image load/sample (luminance field)
+  maskDraw.ts         # paintable draw-your-own-mask grid widget
+  maskOverlay.ts      # "show masks" overlay (tinted shapes + P-labels)
+  breatheViz.ts       # bottom-centre breathing oscilloscope (hover-to-solo)
+  ledTypes.ts         # real LED product presets + physical fit limits
   cloudShader.ts      # GLSL: LED glow accumulation + fbm cloud bumps
   ledField.ts         # color buffer, GPU data texture, hardware byte packing
   streamer.ts         # WebSocket client -> bridge
-  gui.ts              # lil-gui controls
+  gui.ts              # lil-gui controls (Hardware / Pattern / Breathing / Blending)
   main.ts             # render loop wiring it all together
 server/
   index.mjs           # WebSocket -> UDP (WLED DNRGB) bridge

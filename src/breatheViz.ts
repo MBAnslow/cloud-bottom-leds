@@ -24,7 +24,21 @@ export class BreatheViz {
     }
   }
 
-  draw(cfg: Config, t: number) {
+  /** Which partition lane sits under a CSS-pixel y offset, or null if none. */
+  hitLane(offsetY: number, cfg: Config): number | null {
+    const parts = partitionCount(cfg);
+    const H = this.canvas.clientHeight;
+    const padY = 4;
+    const gap = 8;
+    const laneH = (H - padY * 2 - gap * (parts - 1)) / parts;
+    for (let p = 0; p < parts; p++) {
+      const y0 = padY + p * (laneH + gap);
+      if (offsetY >= y0 && offsetY <= y0 + laneH) return p;
+    }
+    return null;
+  }
+
+  draw(cfg: Config, t: number, highlight: number | null = null) {
     this.resize();
     const ctx = this.ctx;
     const W = this.canvas.width;
@@ -50,9 +64,12 @@ export class BreatheViz {
       const midY = y0 + laneH / 2;
       const amp = (laneH / 2) * 0.82;
       const hex = cfg.breatheColors[p] ?? "#ffffff";
+      const isHi = highlight === p;
+      const dim = highlight !== null && !isHi;
+      ctx.globalAlpha = dim ? 0.35 : 1;
 
-      // lane background
-      ctx.fillStyle = "rgba(255,255,255,0.045)";
+      // lane background (brighter when soloed)
+      ctx.fillStyle = isHi ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.045)";
       roundRect(ctx, left, y0, innerW, laneH, 6 * dpr);
       ctx.fill();
 
@@ -97,6 +114,7 @@ export class BreatheViz {
       ctx.textBaseline = "top";
       ctx.fillText(`P${p + 1}`, left + 5 * dpr, y0 + 4 * dpr);
     }
+    ctx.globalAlpha = 1;
   }
 }
 

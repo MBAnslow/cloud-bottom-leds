@@ -7,6 +7,10 @@
     <style>
       :root {
         color-scheme: dark;
+        /* Space reserved for the side menus and the bottom oscilloscope so the
+           LED cloud sits centred between them and never overlaps a menu. */
+        --ui-side: 270px;
+        --ui-bottom: calc(30vh + 24px);
       }
       * {
         box-sizing: border-box;
@@ -21,7 +25,10 @@
       }
       #app {
         position: fixed;
-        inset: 0;
+        top: 8px;
+        left: var(--ui-side);
+        right: var(--ui-side);
+        bottom: var(--ui-bottom);
       }
       #app canvas {
         display: block;
@@ -30,8 +37,9 @@
       }
       #hud {
         position: fixed;
-        left: 12px;
-        bottom: 12px;
+        left: 50%;
+        top: 10px;
+        transform: translateX(-50%);
         z-index: 10;
         padding: 8px 12px;
         border-radius: 10px;
@@ -42,7 +50,8 @@
         line-height: 1.5;
         pointer-events: none;
         user-select: none;
-        max-width: 280px;
+        max-width: 70vw;
+        text-align: center;
       }
       #hud b {
         color: #fff;
@@ -66,15 +75,15 @@
       }
       #breathe-panel {
         position: fixed;
-        left: 12px;
-        top: 50%;
-        transform: translateY(-50%);
+        left: 50%;
+        bottom: 12px;
+        transform: translateX(-50%);
         z-index: 10;
-        width: 168px;
-        height: 46%;
-        max-height: 560px;
-        min-height: 220px;
-        padding: 8px 10px 10px;
+        width: min(62vw, 760px);
+        height: 30vh;
+        max-height: 340px;
+        min-height: 150px;
+        padding: 8px 12px 10px;
         border-radius: 12px;
         background: rgba(10, 12, 20, 0.55);
         backdrop-filter: blur(8px);
@@ -87,24 +96,89 @@
       #breathe-panel.hidden {
         display: none;
       }
+      #breathe-head {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 6px;
+        pointer-events: auto;
+        flex-wrap: wrap;
+      }
       #breathe-title {
         font-size: 11px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #8b93a7;
-        margin-bottom: 6px;
+      }
+      .breathe-ctl {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8b93a7;
+      }
+      .breathe-ctl button {
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.06);
+        color: #cfd6e6;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0;
+      }
+      .breathe-ctl button:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      #breathe-parts-val {
+        min-width: 12px;
+        text-align: center;
+        color: #fff;
+        font-size: 12px;
+      }
+      #breathe-swatches {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #breathe-swatches input[type="color"] {
+        width: 26px;
+        height: 20px;
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        background: none;
+        cursor: pointer;
       }
       #breathe-viz {
         flex: 1;
         width: 100%;
         height: 100%;
+        pointer-events: auto;
+        cursor: crosshair;
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
     <div id="breathe-panel">
-      <div id="breathe-title">breathing</div>
+      <div id="breathe-head">
+        <span id="breathe-title">breathing</span>
+        <span class="breathe-ctl">
+          <span>partitions</span>
+          <button id="breathe-parts-dec" type="button">−</button>
+          <span id="breathe-parts-val">3</span>
+          <button id="breathe-parts-inc" type="button">+</button>
+        </span>
+        <span class="breathe-ctl">
+          <span>colours</span>
+          <span id="breathe-swatches"></span>
+        </span>
+      </div>
       <canvas id="breathe-viz"></canvas>
     </div>
     <div id="hud">

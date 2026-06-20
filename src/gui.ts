@@ -1,7 +1,8 @@
-import GUI, { type Controller } from "lil-gui";
-import { PATTERN_NAMES, PARTITION_LAYOUTS, type Config } from "./config";
+import GUI from "lil-gui";
+import { PATTERN_NAMES, PARTITION_LAYOUTS, BLEND_MODES, OSC_BLENDS, type Config } from "./config";
 import { LED_TYPES, maxGrid } from "./ledTypes";
-import { partitionCount } from "./breathing";
+import { loadMaskFile, loadMaskURL, clearMask } from "./mask";
+import { MaskDraw } from "./maskDraw";
 
 export interface GuiHooks {
   onLayoutChange: () => void;
@@ -9,18 +10,8 @@ export interface GuiHooks {
   onStreamReconfigure: () => void;
 }
 
-/** Read-only "what to buy" figures, refreshed live by main.ts. */
-export interface BuildEstimate {
-  size: string;
-  totalLeds: string;
-  pitch: string;
-  rowDensity: string;
-  amount: string;
-  fit: string;
-  capacity: string;
-}
-
-export function buildGui(cfg: Config, estimate: BuildEstimate, hooks: GuiHooks): GUI {
+export function buildGui(cfg: Config, hooks: GuiHooks): void {
+  // Right-hand menu: the hardware build + the animated pattern.
   const gui = new GUI({ title: "Cloud Bottom LEDs" });
 
   const ledTypeOptions: Record<string, string> = {};
@@ -77,15 +68,6 @@ export function buildGui(cfg: Config, estimate: BuildEstimate, hooks: GuiHooks):
   colsCtrl.onFinishChange(limitThenLayout);
   recomputeLimits();
 
-  const est = hw.addFolder("Build estimate (what to buy)");
-  est.add(estimate, "size").name("cloud size").listen().disable();
-  est.add(estimate, "totalLeds").name("total LEDs").listen().disable();
-  est.add(estimate, "pitch").name("LED pitch").listen().disable();
-  est.add(estimate, "rowDensity").name("density").listen().disable();
-  est.add(estimate, "amount").name("buy").listen().disable();
-  est.add(estimate, "fit").name("feasibility").listen().disable();
-  est.add(estimate, "capacity").name("phys. capacity").listen().disable();
-
   const emitter = hw.addFolder("LEDs");
   emitter.add(cfg, "ledBrightness", 0, 5, 0.01).name("brightness (gain)");
   emitter.add(cfg, "patternFps", 1, 120, 1).name("pattern fps");
@@ -105,9 +87,15 @@ export function buildGui(cfg: Config, estimate: BuildEstimate, hooks: GuiHooks):
   stream.close();
 
   // =====================================================================
-  // PATTERN — the animated content + how the diffuser surface looks.
+  // LEFT MENU — Pattern + Breathing, pinned to the LEFT of the screen.
   // =====================================================================
-  const pat = gui.addFolder("Pattern");
+  const left = new GUI({ title: "Pattern & Breathing" });
+  left.domElement.style.left = "0px";
+  left.domElement.style.right = "auto";
+
+  // PATTERN — the animated content + how the diffuser surface looks.
+  const pat = left.addFolder("Pattern");
+  pat.add(cfg, "patternEnabled").name("enable pattern");
   pat.add(cfg, "pattern", PATTERN_NAMES).name("pattern");
   pat.add(cfg, "speed", 0, 4, 0.01);
   pat.add(cfg, "brightness", 0, 1, 0.01).name("content level");
@@ -123,38 +111,93 @@ export function buildGui(cfg: Config, estimate: BuildEstimate, hooks: GuiHooks):
   look.add(cfg, "backgroundTint", 0, 0.5, 0.01).name("background");
   look.close();
 
-  // =====================================================================
   // BREATHING — per-partition underlying pulse that mixes with the pattern.
-  // =====================================================================
-  const br = gui.addFolder("Breathing");
+  const br = left.addFolder("Breathing");
   br.add(cfg, "breatheEnabled").name("enable");
-  br.add(cfg, "partitions", 2, 6, 1).name("partitions").onChange(rebuildColors);
-  br.add(cfg, "partitionLayout", PARTITION_LAYOUTS).name("layout");
+  const layoutCtrl = br.add(cfg, "partitionLayout", PARTITION_LAYOUTS).name("layout");
   br.add(cfg, "partitionSoftness", 0, 1, 0.01).name("overlap (soft edges)");
   const reshuffle = {
     go: () => {
       cfg.partitionSeed = (Math.random() * 1e6) | 0;
     },
   };
-  br.add(reshuffle, "go").name("reshuffle shapes");
+  br.add(reshuffle, "go").name("reshuffle / move shapes");
+
+  // "mask" layout: an uploaded image is placed (scaled) at each partition's
+  // centre; its bright areas are that colour's region. Upload selects the layout.
+  const mask = br.addFolder("Mask layout");
+  const maskInfo = { name: "(none)" };
+  const maskCtrl = mask.add(maskInfo, "name").name("image").disable();
+  mask.add(cfg, "maskInvert").name("invert (dark = colour)");
+  mask.add(cfg, "maskScale", 0.05, 2, 0.01).name("scale");
+  mask.add(cfg, "maskShowOverlay").name("show masks");
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.style.display = "none";
+  document.body.appendChild(fileInput);
+  function selectMaskLayout() {
+    cfg.partitionLayout = "mask";
+    layoutCtrl.updateDisplay();
+  }
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files?.[0];
+    if (!f) return;
+    try {
+      await loadMaskFile(f);
+      maskInfo.name = f.name.length > 18 ? f.name.slice(0, 17) + "…" : f.name;
+      selectMaskLayout();
+    } catch {
+      maskInfo.name = "load failed";
+    }
+    maskCtrl.updateDisplay();
+    fileInput.value = "";
+  });
+  mask.add({ upload: () => fileInput.click() }, "upload").name("upload mask…");
+
+  // Draw-your-own-mask grid, mounted inside the Mask folder. Painting pushes the
+  // grid straight into the live mask and selects the mask layout.
+  let maskDraw: MaskDraw | null = null;
+  mask.add(
+    {
+      clear: () => {
+        clearMask();
+        maskDraw?.clear();
+        maskInfo.name = "(none)";
+        maskCtrl.updateDisplay();
+      },
+    },
+    "clear"
+  ).name("clear mask");
+
+  const maskChildren = (mask as unknown as { $children: HTMLElement }).$children;
+  maskDraw = new MaskDraw(maskChildren, () => {
+    maskInfo.name = "drawn";
+    selectMaskLayout();
+    maskCtrl.updateDisplay();
+  });
+
+  // Test/automation hook: load a mask from a (data) URL programmatically.
+  (window as unknown as { __uploadMaskURL?: (u: string) => Promise<void> }).__uploadMaskURL = async (
+    url: string
+  ) => {
+    await loadMaskURL(url);
+    maskInfo.name = "loaded (url)";
+    selectMaskLayout();
+    maskCtrl.updateDisplay();
+  };
+
   br.add(cfg, "breatheRate", 1, 30, 0.5).name("rate (per min)");
   br.add(cfg, "breatheDepth", 0, 1, 0.01).name("depth");
-  br.add(cfg, "breatheMix", 0, 1, 0.01).name("colour mix");
   br.add(cfg, "breatheStagger", 0, 1, 0.01).name("stagger");
+  // Partition count and per-partition colours live in the bottom oscilloscope
+  // panel (wired in main.ts), so they are intentionally not added here.
 
-  const colours = br.addFolder("Base colours");
-  let colourCtrls: Controller[] = [];
-  function rebuildColors() {
-    for (const c of colourCtrls) c.destroy();
-    colourCtrls = [];
-    const parts = partitionCount(cfg);
-    // lil-gui reads object[property]; an array works with a string index.
-    const colorObj = cfg.breatheColors as unknown as Record<string, string>;
-    for (let p = 0; p < parts; p++) {
-      colourCtrls.push(colours.addColor(colorObj, String(p)).name(`partition ${p + 1}`));
-    }
-  }
-  rebuildColors();
-
-  return gui;
+  // BLENDING — how the layers combine: the partition oscillators with each
+  // other, and the resulting breathing layer over the pattern.
+  const blend = left.addFolder("Blending");
+  blend.add(cfg, "partitionBlend", OSC_BLENDS).name("oscillators with each other");
+  blend.add(cfg, "breatheBlend", BLEND_MODES).name("breathing with pattern");
+  blend.add(cfg, "breatheMix", 0, 1, 0.01).name("breath opacity");
 }

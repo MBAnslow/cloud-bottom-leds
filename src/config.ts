@@ -38,6 +38,8 @@ export interface Config {
   bumpDetail: number;
 
   // --- Pattern ---
+  /** Master on/off for the animated pattern layer (off = breathing only). */
+  patternEnabled: boolean;
   pattern: PatternName;
   /** Animation speed multiplier. */
   speed: number;
@@ -61,18 +63,28 @@ export interface Config {
   partitionLayout: PartitionLayout;
   /** Edge softness / overlap between partitions: 0 = hard borders, 1 = heavy blend. */
   partitionSoftness: number;
+  /** How overlapping partition oscillators combine with each other. */
+  partitionBlend: OscBlend;
   /** Random seed for the scatter-based layouts (voronoi, gaussian). */
   partitionSeed: number;
   /** Breaths per minute (pulse rate). */
   breatheRate: number;
   /** Depth of the pulse 0..1 (how far it dims at the trough). */
   breatheDepth: number;
-  /** How strongly each partition's base colour tints the pattern 0..1. */
+  /** Opacity of the breathing layer 0..1 (how strongly it shows over the pattern). */
   breatheMix: number;
+  /** How the breathing layer is combined with the pattern (blend mode). */
+  breatheBlend: BlendMode;
   /** Phase spread across partitions 0..1 (0 = all in sync, 1 = a full cycle). */
   breatheStagger: number;
   /** Base colour per partition (hex sRGB), index 0..5. */
   breatheColors: string[];
+  /** For the "mask" layout: invert the image (dark = colour, light = absent). */
+  maskInvert: boolean;
+  /** For the "mask" layout: size of the mask over the scene (1 = fits scene). */
+  maskScale: number;
+  /** Superimpose the per-partition masks over their positions in the scene. */
+  maskShowOverlay: boolean;
 
   // --- Streaming to real hardware ---
   streamEnabled: boolean;
@@ -94,7 +106,8 @@ export type PartitionLayout =
   | "diagonal"
   | "rings"
   | "voronoi"
-  | "gaussian";
+  | "gaussian"
+  | "mask";
 
 export const PARTITION_LAYOUTS: PartitionLayout[] = [
   "columns",
@@ -103,7 +116,48 @@ export const PARTITION_LAYOUTS: PartitionLayout[] = [
   "rings",
   "voronoi",
   "gaussian",
+  "mask",
 ];
+
+/**
+ * How the breathing layer combines with the pattern layer underneath it, named
+ * after the equivalent layer blend modes in graphics software. `normal` simply
+ * overlays it; `additive` adds light (glow); `multiply` tints/pulses the
+ * pattern; `screen`/`lighten` brighten; `darken`/`difference` etc. behave as in
+ * Photoshop. The breathing opacity (`breatheMix`) controls how strongly it mixes.
+ */
+export type BlendMode =
+  | "normal"
+  | "additive"
+  | "screen"
+  | "multiply"
+  | "lighten"
+  | "darken"
+  | "overlay"
+  | "softLight"
+  | "difference";
+
+export const BLEND_MODES: BlendMode[] = [
+  "normal",
+  "additive",
+  "screen",
+  "multiply",
+  "lighten",
+  "darken",
+  "overlay",
+  "softLight",
+  "difference",
+];
+
+/**
+ * How overlapping partition oscillators combine into the single breathing layer
+ * (before it is blended with the pattern). `average` is a weighted mean (the
+ * natural blend); `additive` sums them so overlaps get brighter; `lighten`
+ * keeps the brightest; `screen` is a softer brighten.
+ */
+export type OscBlend = "average" | "additive" | "lighten" | "screen";
+
+export const OSC_BLENDS: OscBlend[] = ["average", "additive", "lighten", "screen"];
 
 export type PatternName =
   | "plasma"
@@ -145,6 +199,7 @@ export const defaultConfig: Config = {
   bumpScale: 2.4,
   bumpDetail: 4,
 
+  patternEnabled: true,
   pattern: "auroraDrift",
   speed: 1.0,
   brightness: 0.9,
@@ -157,12 +212,17 @@ export const defaultConfig: Config = {
   partitions: 3,
   partitionLayout: "columns",
   partitionSoftness: 0.35,
+  partitionBlend: "average",
   partitionSeed: 1,
   breatheRate: 7,
   breatheDepth: 0.7,
   breatheMix: 0.5,
+  breatheBlend: "normal",
   breatheStagger: 0.25,
   breatheColors: ["#3aa0ff", "#ff5d8f", "#ffd166", "#06d6a0", "#b08cff", "#ff8c42"],
+  maskInvert: false,
+  maskScale: 0.6,
+  maskShowOverlay: false,
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",

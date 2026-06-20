@@ -4,10 +4,11 @@ import { LedField } from "./ledField";
 import { renderPattern } from "./patterns";
 import { fragmentShader, vertexShader } from "./cloudShader";
 import { Streamer, type StreamStatus } from "./streamer";
-import { buildGui, type BuildEstimate } from "./gui";
-import { getLedType, maxGrid } from "./ledTypes";
-import { applyBreathing } from "./breathing";
+import { buildGui } from "./gui";
+import { getLedType } from "./ledTypes";
+import { applyBreathing, renderPartitionSolo, partitionCount } from "./breathing";
 import { BreatheViz } from "./breatheViz";
+import { MaskOverlay } from "./maskOverlay";
 
 const cfg: Config = { ...defaultConfig };
 
@@ -119,56 +120,13 @@ function applyStreaming() {
   }
 }
 
-// --- Build estimate (what to buy) ---
-const estimate: BuildEstimate = {
-  size: "",
-  totalLeds: "",
-  pitch: "",
-  rowDensity: "",
-  amount: "",
-  fit: "",
-  capacity: "",
-};
-
-function updateEstimate() {
-  const led = getLedType(cfg.ledType);
-  const count = cfg.rows * cfg.cols;
-  const px = pitchXmm();
-  const py = pitchYmm();
-  const neededDensity = 1000 / px; // LEDs per metre along a row
-  const stripLenM = (cfg.rows * cfg.cloudWidthMm) / 1000;
-
-  estimate.size = `${(cfg.cloudWidthMm / 10).toFixed(0)} × ${(cfg.cloudHeightMm / 10).toFixed(0)} cm`;
-  estimate.totalLeds = `${count}  (${cfg.cols} × ${cfg.rows})`;
-  estimate.pitch = `${px.toFixed(1)} × ${py.toFixed(1)} mm`;
-  estimate.rowDensity = `${neededDensity.toFixed(1)} LED/m along rows`;
-  estimate.amount =
-    led.form === "strip"
-      ? `${stripLenM.toFixed(2)} m of strip (${cfg.rows} × ${(cfg.cloudWidthMm / 1000).toFixed(2)} m)`
-      : `${count} pixel nodes on wire`;
-
-  if (led.form === "node") {
-    estimate.fit = "OK — nodes mount at any spacing";
-  } else if (neededDensity > led.maxDensityPerM + 0.5) {
-    estimate.fit = `too dense: needs ${neededDensity.toFixed(0)}/m > ${led.maxDensityPerM}/m max`;
-  } else {
-    estimate.fit = `OK on a ${led.maxDensityPerM}/m strip (use every Nth LED)`;
-  }
-
-  const { maxCols, maxRows } = maxGrid(cfg.ledType, cfg.cloudWidthMm, cfg.cloudHeightMm);
-  const atCap = cfg.cols >= maxCols || cfg.rows >= maxRows;
-  estimate.capacity = `${maxCols} × ${maxRows} max${atCap ? "  (at physical limit)" : ""}`;
-}
-updateEstimate();
-
 // --- GUI ---
-buildGui(cfg, estimate, {
+buildGui(cfg, {
   onLayoutChange: () => {
     ledField.resize(cfg);
     uniforms.uLeds.value = ledField.texture;
     uniforms.uCols.value = cfg.cols;
     uniforms.uRows.value = cfg.rows;
-    updateEstimate();
     if (cfg.streamEnabled) streamer.reconfigure(cfg, ledField.count);
   },
   onStreamToggle: applyStreaming,
@@ -176,9 +134,12 @@ buildGui(cfg, estimate, {
 });
 
 // --- Resize ---
+// The cloud canvas fills its (#app) container, which is inset from the side
+// menus and the bottom oscilloscope, so the cloud stays centred and clear of
+// the UI. Size the renderer to the container, not the whole window.
 function onResize() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const w = Math.max(1, container.clientWidth);
+  const h = Math.max(1, container.clientHeight);
   renderer.setSize(w, h, false);
   (uniforms.uResolution.value as THREE.Vector2).set(
     w * renderer.getPixelRatio(),
@@ -186,13 +147,76 @@ function onResize() {
   );
 }
 window.addEventListener("resize", onResize);
+// Track container size changes (e.g. the bottom inset is a vh value).
+new ResizeObserver(onResize).observe(container);
 onResize();
 
-// --- Breathing oscilloscope (left panel) ---
+// --- Breathing oscilloscope (bottom-centre panel) ---
 const breathePanel = document.getElementById("breathe-panel")!;
-const breatheViz = new BreatheViz(
-  document.getElementById("breathe-viz") as HTMLCanvasElement
-);
+const vizCanvas = document.getElementById("breathe-viz") as HTMLCanvasElement;
+const breatheViz = new BreatheViz(vizCanvas);
+
+// Partition count + per-partition colours live in the oscilloscope panel.
+const partsVal = document.getElementById("breathe-parts-val")!;
+const swatches = document.getElementById("breathe-swatches")!;
+
+function rebuildSwatches() {
+  const parts = partitionCount(cfg);
+  partsVal.textContent = String(parts);
+  swatches.replaceChildren();
+  for (let p = 0; p < parts; p++) {
+    const input = document.createElement("input");
+    input.type = "color";
+    input.value = cfg.breatheColors[p] ?? "#ffffff";
+    input.title = `partition ${p + 1}`;
+    input.addEventListener("input", () => {
+      cfg.breatheColors[p] = input.value;
+    });
+    swatches.appendChild(input);
+  }
+}
+function stepPartitions(delta: number) {
+  cfg.partitions = Math.max(2, Math.min(6, partitionCount(cfg) + delta));
+  rebuildSwatches();
+}
+document.getElementById("breathe-parts-dec")!.addEventListener("click", () => stepPartitions(-1));
+document.getElementById("breathe-parts-inc")!.addEventListener("click", () => stepPartitions(1));
+rebuildSwatches();
+
+// Mask-layout overlay: superimposes each partition's mask over its position,
+// aligned to the (inset) cloud canvas.
+const maskOverlay = new MaskOverlay(renderer.domElement);
+
+// --- Solo preview (hover an oscilloscope lane to isolate that partition) ---
+let hoverPartition: number | null = null;
+let wasPreviewing = false;
+
+vizCanvas.addEventListener("mousemove", (e) => {
+  hoverPartition = cfg.breatheEnabled ? breatheViz.hitLane(e.offsetY, cfg) : null;
+});
+vizCanvas.addEventListener("mouseleave", () => {
+  hoverPartition = null;
+});
+
+/**
+ * Render the base buffer: the pattern layer (or black when the pattern is
+ * toggled off) with the breathing layer composited on top.
+ */
+function renderBase(step: number) {
+  if (cfg.patternEnabled) {
+    renderPattern(ledField.colors, patternTime, step, cfg);
+  } else {
+    ledField.colors.fill(0);
+  }
+  applyBreathing(ledField.colors, patternTime, cfg);
+}
+
+/** Recompute the normal pattern+breathing buffer once (used when leaving a preview). */
+function refreshBuffer() {
+  const step = 1 / Math.max(1, cfg.patternFps);
+  renderBase(step);
+  dirty = true;
+}
 
 // --- HUD ---
 const hudGrid = document.getElementById("hud-grid")!;
@@ -234,12 +258,24 @@ function frame() {
   while (patternAccum >= step && steps < 8) {
     patternTime += step;
     patternAccum -= step;
-    renderPattern(ledField.colors, patternTime, step, cfg);
-    // Bake the per-partition breathing pulse onto the same buffer, so the
-    // visual and the streamed hardware frames stay identical.
-    applyBreathing(ledField.colors, patternTime, cfg);
+    // Render the pattern (or black if disabled) and bake the per-partition
+    // breathing pulse onto the same buffer, so the visual and the streamed
+    // hardware frames stay identical.
+    renderBase(step);
     dirty = true;
     steps++;
+  }
+
+  // 1b) solo preview: hovering a lane shows just that partition's breathing
+  // (pattern off, all others off). Done every frame so it updates immediately.
+  if (hoverPartition !== null) {
+    renderPartitionSolo(ledField.colors, patternTime, cfg, hoverPartition);
+    dirty = true;
+    wasPreviewing = true;
+  } else if (wasPreviewing) {
+    // Just left the solo preview -> restore the real pattern immediately.
+    refreshBuffer();
+    wasPreviewing = false;
   }
 
   // 2) feed the visualizer (rendered every frame for a smooth, static diffuser)
@@ -248,7 +284,6 @@ function frame() {
   uniforms.uTime.value = patternTime;
   uniforms.uCloudAspect.value = cfg.cloudWidthMm / Math.max(1, cfg.cloudHeightMm);
   computeSigma(uniforms.uSigma.value as THREE.Vector2);
-  updateEstimate();
   uniforms.uLedGain.value = cfg.ledBrightness * led.relBrightness;
   uniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
   uniforms.uTransmission.value = 1 - cfg.opacity / 100;
@@ -259,9 +294,12 @@ function frame() {
   uniforms.uBackground.value = cfg.backgroundTint;
   renderer.render(scene, camera);
 
-  // breathing readout on the left
+  // breathing readout on the left (highlight the soloed lane)
   breathePanel.classList.toggle("hidden", !cfg.breatheEnabled);
-  if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime);
+  if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime, hoverPartition);
+
+  // mask-layout overlay (superimposed mask shapes over their positions)
+  maskOverlay.draw(cfg);
 
   // 3) stream to hardware at the configured data rate
   if (cfg.streamEnabled && streamer.isOpen && dirty) {
