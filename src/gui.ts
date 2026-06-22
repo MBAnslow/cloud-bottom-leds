@@ -4,6 +4,8 @@ import {
   PALETTE_NAMES,
   PARTITION_LAYOUTS,
   BLEND_MODES,
+  CLOUD_DYNAMICS_NOISES,
+  CLOUD_SKY_PRESETS,
   OSC_BLENDS,
   VIEW_MODES,
   type Config,
@@ -31,6 +33,8 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   const cloud3d = gui.addFolder("Cloud shape (3D)");
   cloud3d.add(cfg, "cloudThicknessMm", 50, 1500, 10).name("thickness (mm)");
   cloud3d.add(cfg, "cloudDensity", 0.1, 2, 0.01).name("density");
+  cloud3d.add(cfg, "cloudSky", CLOUD_SKY_PRESETS).name("sky");
+  cloud3d.add(cfg, "cloudNightDarkness", 0, 1, 0.01).name("night darkness");
   cloud3d.close();
 
   const ledTypeOptions: Record<string, string> = {};
@@ -133,6 +137,14 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   pat.add(cfg, "brightness", 0, 1, 0.01).name("content level");
   pat.add(cfg, "hueShift", 0, 360, 1).name("palette shift");
 
+  const dyn = pat.addFolder("Cloud dynamics");
+  dyn.add(cfg, "cloudDynamicsEnabled").name("enable");
+  dyn.add(cfg, "cloudDynamicsType", CLOUD_DYNAMICS_NOISES).name("noise");
+  dyn.add(cfg, "cloudDynamicsAmount", 0, 1, 0.01).name("amount");
+  dyn.add(cfg, "cloudDynamicsScale", 0.2, 10, 0.05).name("scale");
+  dyn.add(cfg, "cloudDynamicsSpeed", 0, 2.5, 0.01).name("speed");
+  dyn.add(cfg, "cloudDynamicsContrast", 0.2, 3, 0.01).name("contrast");
+
   const cloud = pat.addFolder("Cloud surface");
   cloud.add(cfg, "bumpHeight", 0, 1.5, 0.01).name("bumpiness");
   cloud.add(cfg, "bumpScale", 0.5, 8, 0.05).name("bump scale");
@@ -165,7 +177,7 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   mask.add(cfg, "maskScale", 0.05, 2, 0.01).name("scale");
   mask.add(cfg, "maskShowOverlay").name("show masks");
   mask.add(cfg, "maskRotate").name("rotate masks");
-  mask.add(cfg, "maskRotateDegPerMin", -24, 24, 0.1).name("rotation (deg/min)");
+  mask.add(cfg, "maskRotateDegPerMin", -360, 360, 1).name("rotation speed (deg/min)");
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";

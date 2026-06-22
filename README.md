@@ -30,7 +30,9 @@ preview predicts what the real installation will look like.
   orbit** (including from underneath, to see the lit underside), scroll to zoom.
 - **Cloud shape (3D)** — `thickness (mm)` sets how tall the cloud volume is
   above the LED plane, and `density` how thick/opaque it looks; the `bumpiness`
-  and `bump scale` controls shape its puffiness. The LED emission inside the
+  and `bump scale` controls shape its puffiness. `sky` picks the cloud-view
+  background (`night`, `dawn`, `daylight`, `dusk`); `night darkness` deepens
+  the night preset. The LED emission inside the
   base reuses the same physical gaussian spread as the flat view, then scatters
   upward (dimming and softening with height) through the medium.
 - **Cloud dimensions** — set the physical width/height of the cloud (mm). The
@@ -57,6 +59,9 @@ preview predicts what the real installation will look like.
   palette-shift. Palettes include `rainbow`, `sunset`, `ocean`, `forest`,
   `violet`, `ember`, and `greyscale`. `enable pattern` can be turned off to show
   the breathing layer on its own (the pattern becomes a black backdrop).
+- **Cloud dynamics** — a dedicated post-effect applied **after** pattern +
+  breathing to add moving cloud-like ripples. Controls: `noise` type (`value`,
+  `fbm`, `billow`, `ridged`), `amount`, `scale`, `speed`, and `contrast`.
 - **Breathing** — split the cloud into 2–6 partitions, each with its own base
   colour and a slow, phase-staggered "breathe" pulse layered over whatever
   pattern is running (the pulse is baked into the LED buffer, so the preview and
@@ -217,6 +222,7 @@ index.html            # canvas + HUD + breathing oscilloscope panel
 src/
   config.ts           # all tunable parameters + defaults (blend mode lists)
   patterns.ts         # pattern engine (source of truth for LED colors)
+  cloudDynamics.ts    # post pattern+breathe cloud-motion noise modulation
   breathing.ts        # partition weights + breathing layer compositing
   mask.ts             # mask image load/sample (luminance field)
   maskDraw.ts         # paintable draw-your-own-mask grid widget

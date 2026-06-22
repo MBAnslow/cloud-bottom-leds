@@ -8,6 +8,9 @@ export type WiringOrder = "row-major" | "serpentine";
 export type ViewMode = "panel" | "cloud";
 export const VIEW_MODES: ViewMode[] = ["panel", "cloud"];
 
+export type CloudSkyPreset = "night" | "dawn" | "daylight" | "dusk";
+export const CLOUD_SKY_PRESETS: CloudSkyPreset[] = ["night", "dawn", "daylight", "dusk"];
+
 export interface Config {
   /** Which preview is shown on the main canvas. */
   view: ViewMode;
@@ -45,6 +48,10 @@ export interface Config {
   cloudThicknessMm: number;
   /** Overall optical density of the cloud volume (how thick/opaque it looks). */
   cloudDensity: number;
+  /** Background sky preset for cloud view. */
+  cloudSky: CloudSkyPreset;
+  /** Extra darkening applied when `cloudSky` is `night` (0..1). */
+  cloudNightDarkness: number;
 
   // --- Cloud surface shape ---
   /** Height/strength of the cloud bumps (also modulates local thickness/transmission). */
@@ -66,6 +73,18 @@ export interface Config {
   hueShift: number;
   /** Palette selection per pattern (so each pattern can use a different palette). */
   patternPalettes: Record<PatternName, PaletteName>;
+  /** Post effect: add cloud-like motion after pattern + breathing. */
+  cloudDynamicsEnabled: boolean;
+  /** Noise style for cloud dynamics. */
+  cloudDynamicsType: CloudDynamicsNoise;
+  /** Strength of the dynamics modulation. */
+  cloudDynamicsAmount: number;
+  /** Spatial scale/frequency of the dynamics noise. */
+  cloudDynamicsScale: number;
+  /** Animation speed of the dynamics noise flow. */
+  cloudDynamicsSpeed: number;
+  /** Contrast/definition of the dynamics noise. */
+  cloudDynamicsContrast: number;
 
   // --- Look ---
   /** Ambient base glow of the surface even with LEDs dark. */
@@ -198,6 +217,14 @@ export const OSC_BLENDS: OscBlend[] = [
   "difference",
 ];
 
+export type CloudDynamicsNoise = "value" | "fbm" | "billow" | "ridged";
+export const CLOUD_DYNAMICS_NOISES: CloudDynamicsNoise[] = [
+  "value",
+  "fbm",
+  "billow",
+  "ridged",
+];
+
 export type PaletteName =
   | "rainbow"
   | "sunset"
@@ -257,6 +284,8 @@ export const defaultConfig: Config = {
 
   cloudThicknessMm: 450,
   cloudDensity: 0.85,
+  cloudSky: "night",
+  cloudNightDarkness: 0.45,
 
   bumpHeight: 0.55,
   bumpScale: 2.4,
@@ -277,6 +306,12 @@ export const defaultConfig: Config = {
     rain: "ocean",
     solid: "rainbow",
   },
+  cloudDynamicsEnabled: false,
+  cloudDynamicsType: "fbm",
+  cloudDynamicsAmount: 0.2,
+  cloudDynamicsScale: 3.0,
+  cloudDynamicsSpeed: 0.45,
+  cloudDynamicsContrast: 1.2,
 
   ambient: 0.04,
   backgroundTint: 0.02,
@@ -297,7 +332,7 @@ export const defaultConfig: Config = {
   maskScale: 0.6,
   maskShowOverlay: false,
   maskRotate: false,
-  maskRotateDegPerMin: 4,
+  maskRotateDegPerMin: 30,
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",

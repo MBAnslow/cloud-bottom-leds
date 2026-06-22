@@ -86,6 +86,8 @@ export const volumeFragmentShader = /* glsl */ `
   uniform float uAmbient;       // base self-lit fill
   uniform float uTransmission;  // diffuser transmittance (dims the light)
   uniform float uLightReach;    // how far light climbs before fading (0..1 of height)
+  uniform vec3  uSkyBottom;     // cloud-view background gradient (bottom)
+  uniform vec3  uSkyTop;        // cloud-view background gradient (top)
 
   // --- 3D value noise / fbm ---
   float hash31(vec3 p) {
@@ -186,7 +188,7 @@ export const volumeFragmentShader = /* glsl */ `
     vec3 ro = uCamPos;
     vec3 rd = normalize(pf.xyz - ro);
 
-    vec3 sky = mix(vec3(0.016, 0.020, 0.032), vec3(0.05, 0.06, 0.085), clamp(vUv.y, 0.0, 1.0));
+    vec3 sky = mix(uSkyBottom, uSkyTop, clamp(vUv.y, 0.0, 1.0));
 
     vec3 bmin = vec3(-uBoxHalf.x, 0.0, -uBoxHalf.z);
     vec3 bmax = vec3( uBoxHalf.x, uBoxHalf.y, uBoxHalf.z);
@@ -213,15 +215,15 @@ export const volumeFragmentShader = /* glsl */ `
           vec2 uv = vec2((P.x + uBoxHalf.x) / (2.0 * uBoxHalf.x),
                          (P.z + uBoxHalf.z) / (2.0 * uBoxHalf.z));
 
-          // White body: dim at the shadowed base, brighter skylit top.
-          vec3 body = white * (0.16 + 0.5 * cy + uAmbient);
+          // White body: keep it subtle so LED colour reads, with gentle top lift.
+          vec3 body = white * (0.03 + 0.22 * cy + 0.35 * uAmbient);
 
           // Coloured LED light, strongest at the base, fading as it climbs.
           float climb = exp(-cy / max(0.05, uLightReach));
-          vec3 L = emissionAt(uv, cy) * climb * uTransmission;
+          vec3 L = emissionAt(uv, cy) * climb * uTransmission * (1.15 - 0.35 * cy);
 
           vec3 scat = body + L;
-          float a = 1.0 - exp(-26.0 * dens * stepLen);
+          float a = 1.0 - exp(-20.0 * dens * stepLen);
           col += trans * a * scat;
           trans *= (1.0 - a);
           if (trans < 0.01) break;
@@ -230,7 +232,7 @@ export const volumeFragmentShader = /* glsl */ `
     }
 
     col += trans * sky;
-    col = vec3(1.0) - exp(-col * 1.2);
+    col = vec3(1.0) - exp(-col * 0.95);
     col = pow(col, vec3(1.0 / 2.2));
     gl_FragColor = vec4(col, 1.0);
   }

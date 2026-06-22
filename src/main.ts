@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { defaultConfig, type Config } from "./config";
+import { defaultConfig, type CloudSkyPreset, type Config } from "./config";
 import { LedField } from "./ledField";
 import { renderPattern } from "./patterns";
+import { applyCloudDynamics } from "./cloudDynamics";
 import { fragmentShader, vertexShader } from "./cloudShader";
 import {
   fullscreenVertexShader,
@@ -166,6 +167,8 @@ const volUniforms: Record<string, THREE.IUniform> = {
   uAmbient: { value: cfg.ambient },
   uTransmission: { value: 1 - cfg.opacity / 100 },
   uLightReach: { value: 0.5 },
+  uSkyBottom: { value: new THREE.Vector3(0.016, 0.02, 0.032) },
+  uSkyTop: { value: new THREE.Vector3(0.05, 0.06, 0.085) },
 };
 const volScene = new THREE.Scene();
 volScene.add(
@@ -200,6 +203,13 @@ controls.update();
 
 const _view = new THREE.Matrix4();
 const _vp = new THREE.Matrix4();
+
+const CLOUD_SKIES: Record<CloudSkyPreset, { bottom: [number, number, number]; top: [number, number, number] }> = {
+  night: { bottom: [0.0025, 0.0035, 0.006], top: [0.012, 0.016, 0.026] },
+  dawn: { bottom: [0.18, 0.14, 0.18], top: [0.56, 0.44, 0.42] },
+  daylight: { bottom: [0.50, 0.62, 0.84], top: [0.78, 0.88, 1.0] },
+  dusk: { bottom: [0.14, 0.11, 0.16], top: [0.40, 0.30, 0.40] },
+};
 
 /** Box half-extents in normalised world units (longest footprint axis = 1). */
 function cloudBoxHalf(out: THREE.Vector3) {
@@ -242,6 +252,22 @@ function renderCloudVolume(w: number, h: number) {
   volUniforms.uBumpDetail.value = cfg.bumpDetail;
   volUniforms.uAmbient.value = cfg.ambient;
   volUniforms.uTransmission.value = 1 - cfg.opacity / 100;
+  const sky = CLOUD_SKIES[cfg.cloudSky];
+  let nightScale = 1;
+  if (cfg.cloudSky === "night") {
+    // 0 = preset values, 1 = much darker night.
+    nightScale = 1 - cfg.cloudNightDarkness * 0.92;
+  }
+  (volUniforms.uSkyBottom.value as THREE.Vector3).set(
+    sky.bottom[0] * nightScale,
+    sky.bottom[1] * nightScale,
+    sky.bottom[2] * nightScale
+  );
+  (volUniforms.uSkyTop.value as THREE.Vector3).set(
+    sky.top[0] * nightScale,
+    sky.top[1] * nightScale,
+    sky.top[2] * nightScale
+  );
   renderer.render(volScene, camera);
 }
 
@@ -390,6 +416,7 @@ function renderBase(step: number) {
     ledField.colors.fill(0);
   }
   applyBreathing(ledField.colors, patternTime, cfg);
+  applyCloudDynamics(ledField.colors, patternTime, cfg);
 }
 
 /** Recompute the normal pattern+breathing buffer once (used when leaving a preview). */
@@ -451,6 +478,7 @@ function frame() {
   // (pattern off, all others off). Done every frame so it updates immediately.
   if (hoverPartition !== null) {
     renderPartitionSolo(ledField.colors, patternTime, cfg, hoverPartition);
+    applyCloudDynamics(ledField.colors, patternTime, cfg);
     dirty = true;
     wasPreviewing = true;
   } else if (wasPreviewing) {
@@ -491,7 +519,7 @@ function frame() {
   if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime, hoverPartition);
 
   // mask-layout overlay only makes sense over the flat panel.
-  maskOverlay.draw(cloudView ? { ...cfg, maskShowOverlay: false } : cfg, patternTime);
+  maskOverlay.draw(cloudView ? { ...cfg, maskShowOverlay: false } : cfg, now * 0.001);
   centroidOverlay.draw(cfg);
 
   // 3) stream to hardware at the configured data rate
