@@ -73,6 +73,8 @@ export interface Config {
   hueShift: number;
   /** Palette selection per pattern (so each pattern can use a different palette). */
   patternPalettes: Record<PatternName, PaletteName>;
+  /** How the pattern layer blends with the layer stack underneath it. */
+  patternBlend: BlendMode;
   /** Post effect: add cloud-like motion after pattern + breathing. */
   cloudDynamicsEnabled: boolean;
   /** Noise style for cloud dynamics. */
@@ -85,6 +87,10 @@ export interface Config {
   cloudDynamicsSpeed: number;
   /** Contrast/definition of the dynamics noise. */
   cloudDynamicsContrast: number;
+  /** How the cloud-dynamics layer blends with the stack underneath it. */
+  cloudDynamicsBlend: BlendMode;
+  /** Order that the three layers are composited in. */
+  layerOrder: LayerOrder;
 
   // --- Look ---
   /** Ambient base glow of the surface even with LEDs dark. */
@@ -111,7 +117,7 @@ export interface Config {
   breatheDepth: number;
   /** Opacity of the breathing layer 0..1 (how strongly it shows over the pattern). */
   breatheMix: number;
-  /** How the breathing layer is combined with the pattern (blend mode). */
+  /** How the breathing layer blends with the current layer stack backdrop. */
   breatheBlend: BlendMode;
   /** Phase spread across partitions 0..1 (0 = all in sync, 1 = a full cycle). */
   breatheStagger: number;
@@ -189,6 +195,23 @@ export const BLEND_MODES: BlendMode[] = [
   "overlay",
   "softLight",
   "difference",
+];
+
+export type LayerOrder =
+  | "pattern>breathing>cloud"
+  | "pattern>cloud>breathing"
+  | "breathing>pattern>cloud"
+  | "breathing>cloud>pattern"
+  | "cloud>pattern>breathing"
+  | "cloud>breathing>pattern";
+
+export const LAYER_ORDERS: LayerOrder[] = [
+  "pattern>breathing>cloud",
+  "pattern>cloud>breathing",
+  "breathing>pattern>cloud",
+  "breathing>cloud>pattern",
+  "cloud>pattern>breathing",
+  "cloud>breathing>pattern",
 ];
 
 /**
@@ -306,12 +329,15 @@ export const defaultConfig: Config = {
     rain: "ocean",
     solid: "rainbow",
   },
+  patternBlend: "normal",
   cloudDynamicsEnabled: false,
   cloudDynamicsType: "fbm",
   cloudDynamicsAmount: 0.2,
   cloudDynamicsScale: 3.0,
   cloudDynamicsSpeed: 0.45,
   cloudDynamicsContrast: 1.2,
+  cloudDynamicsBlend: "overlay",
+  layerOrder: "pattern>breathing>cloud",
 
   ambient: 0.04,
   backgroundTint: 0.02,

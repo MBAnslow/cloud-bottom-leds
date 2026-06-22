@@ -53,19 +53,12 @@ function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
-/**
- * Post layer applied AFTER pattern + breathing.
- * Multiplies each LED by an animated 2D noise field to create a subtle,
- * cloud-like ripple/flow illusion.
- */
-export function applyCloudDynamics(out: Float32Array, t: number, cfg: Config): void {
-  if (!cfg.cloudDynamicsEnabled) return;
-
+/** Fill a greyscale cloud-dynamics layer (0..1) for compositing. */
+export function renderCloudDynamicsLayer(out: Float32Array, t: number, cfg: Config): void {
   const rows = cfg.rows;
   const cols = cfg.cols;
   const scale = Math.max(0.15, cfg.cloudDynamicsScale);
   const speed = cfg.cloudDynamicsSpeed;
-  const amount = clamp01(cfg.cloudDynamicsAmount);
   const contrast = Math.max(0.2, cfg.cloudDynamicsContrast);
 
   // Gentle anisotropic drift keeps the field from looking static/repeating.
@@ -87,13 +80,11 @@ export function applyCloudDynamics(out: Float32Array, t: number, cfg: Config): v
       // Contrast remap around 0.5.
       n = clamp01(n);
       n = Math.pow(n, contrast);
-      const centered = n * 2 - 1; // -1..1
-      const mod = 1 + centered * amount;
 
       const o = (r * cols + c) * 3;
-      out[o] *= mod;
-      out[o + 1] *= mod;
-      out[o + 2] *= mod;
+      out[o] = n;
+      out[o + 1] = n;
+      out[o + 2] = n;
     }
   }
 }

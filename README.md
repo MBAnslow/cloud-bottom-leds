@@ -91,21 +91,24 @@ preview predicts what the real installation will look like.
   (with centre markers and P-labels) so you can see exactly where each colour
   sits; `clear mask` removes it.
 - **Blending** — its own menu, controlling how the layers combine.
+  `layer order` lets you choose the stack order of `pattern`, `breathing`, and
+  `cloud` dynamics.
+  `pattern with stack`, `breathing with stack`, and `cloud with stack` set a
+  blend mode per layer (`normal`, `additive`, `screen`, `multiply`, `lighten`,
+  `darken`, `overlay`, `softLight`, `difference`) and the result is normalised
+  to 0..1 per channel.
   `oscillators with each other` sets how overlapping partition pulses merge
   (`average` weighted mean, `additive` so overlaps brighten, `lighten` keeps the
   brightest, `screen` for a softer brighten, `multiply`, `darken`, or
-  `difference` for more stylised interaction). `breathing with pattern` is the
-  standard graphics layer blend mode for the combined breathing layer over the
-  pattern (`normal`, `additive`, `screen`, `multiply`, `lighten`, `darken`,
-  `overlay`, `softLight`, `difference`), and `breath opacity` controls how
-  strongly that layer shows.
+  `difference` for more stylised interaction). `breath opacity` controls how
+  strongly the breathing layer contributes.
 
 The controls are split into two side menus: on the **right**, the **view**
 selector and **Hardware** (cloud size, LED grid, diffuser, streaming); on the
 **left**, **Pattern** (the
 animated content and the cloud surface look), **Breathing** (layout/mask,
-overlap, rate/depth/stagger), and **Blending** (oscillator + pattern blend
-modes, breath opacity). The LED cloud sits centred between them, and the
+overlap, rate/depth/stagger), and **Blending** (layer order, per-layer stack
+blends, oscillator blending, breath opacity). The LED cloud sits centred between them, and the
 breathing oscilloscope runs along the bottom centre — the **partition count**
 and the **per-partition colours** live right there in the oscilloscope panel.
 - **Live hardware streaming** — pushes frames to a [WLED](https://kno.wled.ge/)
