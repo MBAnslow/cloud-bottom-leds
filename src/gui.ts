@@ -1,7 +1,17 @@
 import GUI from "lil-gui";
-import { PATTERN_NAMES, PARTITION_LAYOUTS, BLEND_MODES, OSC_BLENDS, type Config } from "./config";
+import {
+  PATTERN_NAMES,
+  PALETTE_NAMES,
+  PARTITION_LAYOUTS,
+  BLEND_MODES,
+  OSC_BLENDS,
+  VIEW_MODES,
+  type Config,
+  type PaletteName,
+} from "./config";
 import { LED_TYPES, maxGrid } from "./ledTypes";
 import { loadMaskFile, loadMaskURL, clearMask } from "./mask";
+import { clearPartitionCenters } from "./breathing";
 import { MaskDraw } from "./maskDraw";
 
 export interface GuiHooks {
@@ -13,6 +23,15 @@ export interface GuiHooks {
 export function buildGui(cfg: Config, hooks: GuiHooks): void {
   // Right-hand menu: the hardware build + the animated pattern.
   const gui = new GUI({ title: "Cloud Bottom LEDs" });
+
+  // View selector: flat build panel vs. the 3D volumetric lit cloud (orbit by
+  // click-dragging the canvas).
+  gui.add(cfg, "view", VIEW_MODES).name("view");
+
+  const cloud3d = gui.addFolder("Cloud shape (3D)");
+  cloud3d.add(cfg, "cloudThicknessMm", 50, 1500, 10).name("thickness (mm)");
+  cloud3d.add(cfg, "cloudDensity", 0.1, 2, 0.01).name("density");
+  cloud3d.close();
 
   const ledTypeOptions: Record<string, string> = {};
   for (const t of LED_TYPES) ledTypeOptions[t.label] = t.id;
@@ -96,10 +115,23 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   // PATTERN — the animated content + how the diffuser surface looks.
   const pat = left.addFolder("Pattern");
   pat.add(cfg, "patternEnabled").name("enable pattern");
-  pat.add(cfg, "pattern", PATTERN_NAMES).name("pattern");
+  const patternCtrl = pat.add(cfg, "pattern", PATTERN_NAMES).name("pattern");
+  const paletteState: { palette: PaletteName } = {
+    palette: cfg.patternPalettes[cfg.pattern],
+  };
+  const paletteCtrl = pat
+    .add(paletteState, "palette", PALETTE_NAMES)
+    .name("palette")
+    .onChange((v: string) => {
+      cfg.patternPalettes[cfg.pattern] = v as PaletteName;
+    });
+  patternCtrl.onChange(() => {
+    paletteState.palette = cfg.patternPalettes[cfg.pattern];
+    paletteCtrl.updateDisplay();
+  });
   pat.add(cfg, "speed", 0, 4, 0.01);
   pat.add(cfg, "brightness", 0, 1, 0.01).name("content level");
-  pat.add(cfg, "hueShift", 0, 360, 1).name("hue shift");
+  pat.add(cfg, "hueShift", 0, 360, 1).name("palette shift");
 
   const cloud = pat.addFolder("Cloud surface");
   cloud.add(cfg, "bumpHeight", 0, 1.5, 0.01).name("bumpiness");
@@ -118,6 +150,7 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   br.add(cfg, "partitionSoftness", 0, 1, 0.01).name("overlap (soft edges)");
   const reshuffle = {
     go: () => {
+      clearPartitionCenters(cfg.partitionLayout);
       cfg.partitionSeed = (Math.random() * 1e6) | 0;
     },
   };
@@ -131,6 +164,8 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   mask.add(cfg, "maskInvert").name("invert (dark = colour)");
   mask.add(cfg, "maskScale", 0.05, 2, 0.01).name("scale");
   mask.add(cfg, "maskShowOverlay").name("show masks");
+  mask.add(cfg, "maskRotate").name("rotate masks");
+  mask.add(cfg, "maskRotateDegPerMin", -24, 24, 0.1).name("rotation (deg/min)");
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";

@@ -31,6 +31,8 @@ export const fragmentShader = /* glsl */ `
   uniform float uAmbient;
   uniform float uBackground;
 
+  uniform int   uViewMode;   // 0 = flat build panel, 1 = lit cloud silhouette
+
   // --- value noise / fbm for the cloud surface ---
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -63,6 +65,37 @@ export const fragmentShader = /* glsl */ `
     return texture2D(uLeds, vec2((c + 0.5) / uCols, (r + 0.5) / uRows)).rgb;
   }
 
+  // --- procedural cumulus silhouette (viewed from below) -------------------
+  // Overlapping soft lobes form a puffy heap. lobe = vec3(x, y, r): x is a
+  // fraction of the panel width (so the heap spans wide clouds), y and r are in
+  // height units. The lower lobes make the bulbous underside the LEDs light up.
+  const int NLOBES = 9;
+  vec3 lobeAt(int i) {
+    if (i == 0) return vec3(0.50, 0.50, 0.30);
+    if (i == 1) return vec3(0.30, 0.46, 0.24);
+    if (i == 2) return vec3(0.70, 0.46, 0.24);
+    if (i == 3) return vec3(0.16, 0.44, 0.18);
+    if (i == 4) return vec3(0.84, 0.44, 0.18);
+    if (i == 5) return vec3(0.40, 0.66, 0.20);
+    if (i == 6) return vec3(0.60, 0.68, 0.18);
+    if (i == 7) return vec3(0.50, 0.76, 0.16);
+    return vec3(0.50, 0.40, 0.22);
+  }
+  // Metaball field at point a (aspect space, width = A). A soft MAX of gaussian
+  // lobes keeps the field bounded in [0,1] (each lobe peaks at 1 at its centre),
+  // so a fixed threshold gives a clean, predictable silhouette at any aspect.
+  float cloudField(vec2 a, float A) {
+    float f = 0.0;
+    for (int i = 0; i < NLOBES; i++) {
+      vec3 L = lobeAt(i);
+      vec2 c = vec2(L.x * A, L.y);
+      float r = L.z;
+      vec2 d = a - c;
+      f = max(f, exp(-dot(d, d) / (2.0 * r * r)));
+    }
+    return f;
+  }
+
   void main() {
     // Fit the physical cloud rectangle into the screen (contain), preserving
     // its real width:height aspect so the LEDs are spaced (never stretched).
@@ -76,10 +109,15 @@ export const fragmentShader = /* glsl */ `
       uv.y = (vUv.y - 0.5) / s + 0.5;
     }
 
-    // Outside the cloud panel: plain background so the cloud's width & height
-    // read clearly as a bounded rectangle.
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-      gl_FragColor = vec4(vec3(0.015, 0.018, 0.03), 1.0);
+    // Sky/room behind the cloud (used in cloud view, and as the panel backdrop).
+    vec3 sky = mix(vec3(0.015, 0.018, 0.03), vec3(0.045, 0.055, 0.08), clamp(vUv.y, 0.0, 1.0));
+
+    // Outside the cloud's bounding rect there are no LEDs: in panel view show the
+    // plain backdrop so width/height read as a bounded rectangle; in cloud view
+    // show the sky (the silhouette lives inside the rect).
+    bool inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+    if (!inside) {
+      gl_FragColor = vec4(uViewMode == 1 ? sky : vec3(0.015, 0.018, 0.03), 1.0);
       return;
     }
 
@@ -138,15 +176,57 @@ export const fragmentShader = /* glsl */ `
     // dot would get a directional gradient and look skewed.
     vec3 transmitted = light * uTransmission;
 
-    // The bumpy cloud is an additive relief layer sitting on top: front-lit
-    // ridges, shadowed valleys. This gives the 3D cloud look without distorting
-    // the LED spots. Its strength scales with bumpiness.
-    float relief = mix(0.12, 1.0, shade);
-    float reliefStrength = 0.05 + 0.22 * uBumpHeight;
-    vec3 cloudBody = cloudTint * (uAmbient + reliefStrength * relief);
+    vec3 col;
+    if (uViewMode == 1) {
+      // === Cloud view: light the underside of a puffy cumulus silhouette. ===
+      float A = uCloudAspect;
+      vec2 a = vec2(uv.x * A, uv.y);
 
-    vec3 col = transmitted + cloudBody;
-    col += vec3(0.05, 0.07, 0.13) * uBackground;
+      // Wobble the sample so the lobe edges are irregular; tied to bumpiness.
+      vec2 wob = (vec2(fbm(a * uBumpScale + 11.3), fbm(a * uBumpScale + 37.7)) - 0.5)
+                 * 0.12 * (0.4 + uBumpHeight);
+      vec2  a2 = a + wob;
+
+      // f in [0,1]; the silhouette boundary sits at ~0.5.
+      float f = cloudField(a2, A);
+      float coverage = smoothstep(0.42, 0.6, f);
+
+      // Form: normal from the field gradient -> rounded, lit-from-front lobes.
+      float ce = 0.01;
+      float fx = cloudField(a2 + vec2(ce, 0.0), A) - cloudField(a2 - vec2(ce, 0.0), A);
+      float fy = cloudField(a2 + vec2(0.0, ce), A) - cloudField(a2 - vec2(0.0, ce), A);
+      vec3 cn = normalize(vec3(-fx, -fy, 1.2 * ce));
+      vec3 keyC = normalize(vec3(-0.25, 0.55, 0.8));
+      float formShade = clamp(dot(cn, keyC) * 0.5 + 0.5, 0.0, 1.0);
+      float form = mix(0.35, 1.0, formShade);
+
+      // Fine surface texture (the existing bump relief) confined to the cloud.
+      float relief = mix(0.5, 1.0, shade);
+
+      // Thin silhouette edges glow (light leaks through the rim of a lit cloud):
+      // a band peaking where the coverage transitions.
+      float rim = coverage * (1.0 - coverage) * 4.0;
+
+      // The colored LED light is the emissive content; form shades it into puffs,
+      // a soft body fills shadowed areas, and the rim adds the glowing edge.
+      vec3 glow = transmitted * (0.55 + 0.45 * form);
+      vec3 body = cloudTint * (uAmbient * 1.5 + 0.10 * form * relief);
+      vec3 cloudCol = glow + body + transmitted * rim * 0.6;
+
+      // A faint colored halo bleeds just outside the silhouette (and fades to
+      // pure sky away from it).
+      float halo = smoothstep(0.12, 0.42, f) * (1.0 - coverage);
+      col = mix(sky + transmitted * halo * 0.25, cloudCol, coverage);
+    } else {
+      // === Panel view: the flat, true-to-scale build surface. ===
+      // The bumpy cloud is an additive relief layer sitting on top: front-lit
+      // ridges, shadowed valleys, without distorting the LED spots.
+      float relief = mix(0.12, 1.0, shade);
+      float reliefStrength = 0.05 + 0.22 * uBumpHeight;
+      vec3 cloudBody = cloudTint * (uAmbient + reliefStrength * relief);
+      col = transmitted + cloudBody;
+      col += vec3(0.05, 0.07, 0.13) * uBackground;
+    }
 
     // tone map + gamma
     col = vec3(1.0) - exp(-col * 1.25);

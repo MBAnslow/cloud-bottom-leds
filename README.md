@@ -22,6 +22,17 @@ the bytes sent to the hardware. What you see is what the strips show.
 This is a **build-planning tool**: the controls are physical quantities so the
 preview predicts what the real installation will look like.
 
+- **View** — switch between two previews of the same LED light field: `panel`,
+  the flat, true-to-scale build surface (best for dialing in pitch, spread and
+  uniformity), and `cloud`, a **3D volumetric cloud** lit from an LED plane
+  embedded in its base — exactly the physical build (LEDs sitting just inside
+  the bottom of the cloud, throwing colour up into the volume). **Click-drag to
+  orbit** (including from underneath, to see the lit underside), scroll to zoom.
+- **Cloud shape (3D)** — `thickness (mm)` sets how tall the cloud volume is
+  above the LED plane, and `density` how thick/opaque it looks; the `bumpiness`
+  and `bump scale` controls shape its puffiness. The LED emission inside the
+  base reuses the same physical gaussian spread as the flat view, then scatters
+  upward (dimming and softening with height) through the medium.
 - **Cloud dimensions** — set the physical width/height of the cloud (mm). The
   rows × columns are spread evenly inside it, so the LED pitch is derived for you.
 - **LED type** — pick a real product (WS2812B 30/60/144/m, WS2815, SK6812 RGBW,
@@ -42,9 +53,10 @@ preview predicts what the real installation will look like.
 - **Cloud surface** — a static, bumpy physical surface (bumpiness, scale,
   detail). Thicker bumps block more light. Only the LEDs animate.
 - **Patterns** — plasma, rainbow waves, twinkle, fire, aurora drift, breathe,
-  rain, solid. Plus speed, content level, and hue-shift. `enable pattern` can be
-  turned off to show the breathing layer on its own (the pattern becomes a black
-  backdrop).
+  rain, solid. Plus speed, content level, **palette** (saved per pattern), and
+  palette-shift. Palettes include `rainbow`, `sunset`, `ocean`, `forest`,
+  `violet`, `ember`, and `greyscale`. `enable pattern` can be turned off to show
+  the breathing layer on its own (the pattern becomes a black backdrop).
 - **Breathing** — split the cloud into 2–6 partitions, each with its own base
   colour and a slow, phase-staggered "breathe" pulse layered over whatever
   pattern is running (the pulse is baked into the LED buffer, so the preview and
@@ -76,14 +88,16 @@ preview predicts what the real installation will look like.
 - **Blending** — its own menu, controlling how the layers combine.
   `oscillators with each other` sets how overlapping partition pulses merge
   (`average` weighted mean, `additive` so overlaps brighten, `lighten` keeps the
-  brightest, or `screen` for a softer brighten). `breathing with pattern` is the
+  brightest, `screen` for a softer brighten, `multiply`, `darken`, or
+  `difference` for more stylised interaction). `breathing with pattern` is the
   standard graphics layer blend mode for the combined breathing layer over the
   pattern (`normal`, `additive`, `screen`, `multiply`, `lighten`, `darken`,
   `overlay`, `softLight`, `difference`), and `breath opacity` controls how
   strongly that layer shows.
 
-The controls are split into two side menus: on the **right**, **Hardware**
-(cloud size, LED grid, diffuser, streaming); on the **left**, **Pattern** (the
+The controls are split into two side menus: on the **right**, the **view**
+selector and **Hardware** (cloud size, LED grid, diffuser, streaming); on the
+**left**, **Pattern** (the
 animated content and the cloud surface look), **Breathing** (layout/mask,
 overlap, rate/depth/stagger), and **Blending** (oscillator + pattern blend
 modes, breath opacity). The LED cloud sits centred between them, and the
@@ -209,7 +223,8 @@ src/
   maskOverlay.ts      # "show masks" overlay (tinted shapes + P-labels)
   breatheViz.ts       # bottom-centre breathing oscilloscope (hover-to-solo)
   ledTypes.ts         # real LED product presets + physical fit limits
-  cloudShader.ts      # GLSL: LED glow accumulation + fbm cloud bumps
+  cloudShader.ts      # GLSL: flat-panel LED glow accumulation + fbm cloud bumps
+  cloudVolumeShader.ts# GLSL: LED emission pass + 3D volumetric cloud ray-march
   ledField.ts         # color buffer, GPU data texture, hardware byte packing
   streamer.ts         # WebSocket client -> bridge
   gui.ts              # lil-gui controls (Hardware / Pattern / Breathing / Blending)

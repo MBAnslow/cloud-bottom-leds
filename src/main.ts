@@ -1,14 +1,21 @@
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { defaultConfig, type Config } from "./config";
 import { LedField } from "./ledField";
 import { renderPattern } from "./patterns";
 import { fragmentShader, vertexShader } from "./cloudShader";
+import {
+  fullscreenVertexShader,
+  emissionFragmentShader,
+  volumeFragmentShader,
+} from "./cloudVolumeShader";
 import { Streamer, type StreamStatus } from "./streamer";
 import { buildGui } from "./gui";
 import { getLedType } from "./ledTypes";
 import { applyBreathing, renderPartitionSolo, partitionCount } from "./breathing";
 import { BreatheViz } from "./breatheViz";
 import { MaskOverlay } from "./maskOverlay";
+import { CentroidOverlay } from "./centroidOverlay";
 
 const cfg: Config = { ...defaultConfig };
 
@@ -88,6 +95,7 @@ const uniforms: Record<string, THREE.IUniform> = {
   uBumpDetail: { value: cfg.bumpDetail },
   uAmbient: { value: cfg.ambient },
   uBackground: { value: cfg.backgroundTint },
+  uViewMode: { value: cfg.view === "cloud" ? 1 : 0 },
 };
 computeSigma(uniforms.uSigma.value as THREE.Vector2);
 
@@ -101,6 +109,141 @@ const material = new THREE.ShaderMaterial({
 const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
 quad.frustumCulled = false;
 scene.add(quad);
+
+// =====================================================================
+// 3D VOLUMETRIC VIEW — the real build: LEDs embedded in the cloud base
+// throwing light up into a ray-marched cloud volume, orbited with a camera.
+// =====================================================================
+
+// Pass 1 target: the LED glow leaving the base plane (footprint UV space).
+const EMIT_RES = 384;
+const emissionRT = new THREE.WebGLRenderTarget(EMIT_RES, EMIT_RES, {
+  type: THREE.FloatType,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  wrapS: THREE.ClampToEdgeWrapping,
+  wrapT: THREE.ClampToEdgeWrapping,
+  depthBuffer: false,
+  stencilBuffer: false,
+});
+const emissionUniforms: Record<string, THREE.IUniform> = {
+  uLeds: { value: ledField.texture },
+  uCols: { value: cfg.cols },
+  uRows: { value: cfg.rows },
+  uSigma: { value: uniforms.uSigma.value },
+  uLedGain: { value: cfg.ledBrightness },
+  uWhiteMix: { value: 0 },
+};
+const emissionScene = new THREE.Scene();
+emissionScene.add(
+  Object.assign(
+    new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: emissionUniforms,
+        vertexShader: fullscreenVertexShader,
+        fragmentShader: emissionFragmentShader,
+        depthTest: false,
+        depthWrite: false,
+      })
+    ),
+    { frustumCulled: false }
+  )
+);
+
+// Pass 2: the volume ray-march (full-screen; rays reconstructed from the
+// perspective camera's matrices, which OrbitControls drives).
+const volUniforms: Record<string, THREE.IUniform> = {
+  uResolution: { value: new THREE.Vector2(1, 1) },
+  uInvViewProj: { value: new THREE.Matrix4() },
+  uCamPos: { value: new THREE.Vector3() },
+  uEmission: { value: emissionRT.texture },
+  uBoxHalf: { value: new THREE.Vector3(0.5, 0.4, 0.5) },
+  uCloudDensity: { value: cfg.cloudDensity },
+  uBumpScale: { value: cfg.bumpScale },
+  uBumpHeight: { value: cfg.bumpHeight },
+  uBumpDetail: { value: cfg.bumpDetail },
+  uAmbient: { value: cfg.ambient },
+  uTransmission: { value: 1 - cfg.opacity / 100 },
+  uLightReach: { value: 0.5 },
+};
+const volScene = new THREE.Scene();
+volScene.add(
+  Object.assign(
+    new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: volUniforms,
+        vertexShader: fullscreenVertexShader,
+        fragmentShader: volumeFragmentShader,
+        depthTest: false,
+        depthWrite: false,
+      })
+    ),
+    { frustumCulled: false }
+  )
+);
+
+// Perspective camera + orbit controls (active only in the cloud view). The
+// default angle looks up at the cloud from slightly below and to the side, so
+// the lit underside (where the LEDs live) reads immediately.
+const orbitCam = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+orbitCam.position.set(0.7, -0.12, 1.55);
+const controls = new OrbitControls(orbitCam, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.4;
+controls.maxDistance = 6;
+controls.target.set(0, 0.16, 0);
+controls.enabled = false;
+controls.update();
+
+const _view = new THREE.Matrix4();
+const _vp = new THREE.Matrix4();
+
+/** Box half-extents in normalised world units (longest footprint axis = 1). */
+function cloudBoxHalf(out: THREE.Vector3) {
+  const w = cfg.cloudWidthMm;
+  const d = cfg.cloudHeightMm; // the other footprint dimension
+  const maxDim = Math.max(w, d);
+  const hx = 0.5 * (w / maxDim);
+  const hz = 0.5 * (d / maxDim);
+  const hy = Math.max(0.05, cfg.cloudThicknessMm / maxDim);
+  out.set(hx, hy, hz);
+}
+
+/** Render the 3D volumetric cloud view (emission pass -> ray-march pass). */
+function renderCloudVolume(w: number, h: number) {
+  // Pass 1: LED emission into the offscreen target.
+  emissionUniforms.uLeds.value = ledField.texture;
+  emissionUniforms.uCols.value = cfg.cols;
+  emissionUniforms.uRows.value = cfg.rows;
+  emissionUniforms.uSigma.value = uniforms.uSigma.value;
+  const led = getLedType(cfg.ledType);
+  emissionUniforms.uLedGain.value = cfg.ledBrightness * led.relBrightness;
+  emissionUniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
+  renderer.setRenderTarget(emissionRT);
+  renderer.render(emissionScene, camera);
+  renderer.setRenderTarget(null);
+
+  // Camera matrices for ray reconstruction.
+  orbitCam.aspect = w / Math.max(1, h);
+  orbitCam.updateProjectionMatrix();
+  orbitCam.updateMatrixWorld(true);
+  _view.copy(orbitCam.matrixWorld).invert();
+  _vp.multiplyMatrices(orbitCam.projectionMatrix, _view);
+  (volUniforms.uInvViewProj.value as THREE.Matrix4).copy(_vp).invert();
+  (volUniforms.uCamPos.value as THREE.Vector3).copy(orbitCam.position);
+  (volUniforms.uResolution.value as THREE.Vector2).set(w, h);
+  cloudBoxHalf(volUniforms.uBoxHalf.value as THREE.Vector3);
+  volUniforms.uCloudDensity.value = cfg.cloudDensity;
+  volUniforms.uBumpScale.value = cfg.bumpScale;
+  volUniforms.uBumpHeight.value = cfg.bumpHeight;
+  volUniforms.uBumpDetail.value = cfg.bumpDetail;
+  volUniforms.uAmbient.value = cfg.ambient;
+  volUniforms.uTransmission.value = 1 - cfg.opacity / 100;
+  renderer.render(volScene, camera);
+}
 
 // --- Streaming ---
 const streamer = new Streamer();
@@ -186,6 +329,44 @@ rebuildSwatches();
 // Mask-layout overlay: superimposes each partition's mask over its position,
 // aligned to the (inset) cloud canvas.
 const maskOverlay = new MaskOverlay(renderer.domElement);
+// Draggable centroids for partition layouts (panel view).
+const centroidOverlay = new CentroidOverlay(renderer.domElement);
+
+let dragPointerId: number | null = null;
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (!centroidOverlay.beginDrag(cfg, e.clientX, e.clientY)) return;
+  dragPointerId = e.pointerId;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  refreshBuffer();
+  e.preventDefault();
+});
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (centroidOverlay.isDragging) {
+    if (dragPointerId !== null && e.pointerId !== dragPointerId) return;
+    if (centroidOverlay.dragTo(cfg, e.clientX, e.clientY)) refreshBuffer();
+    e.preventDefault();
+    return;
+  }
+  centroidOverlay.hoverAt(cfg, e.clientX, e.clientY);
+});
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (dragPointerId !== null && e.pointerId === dragPointerId) {
+    dragPointerId = null;
+    centroidOverlay.endDrag();
+    renderer.domElement.releasePointerCapture(e.pointerId);
+    refreshBuffer();
+  }
+});
+renderer.domElement.addEventListener("pointercancel", (e) => {
+  if (dragPointerId !== null && e.pointerId === dragPointerId) {
+    dragPointerId = null;
+    centroidOverlay.endDrag();
+    refreshBuffer();
+  }
+});
+renderer.domElement.addEventListener("pointerleave", () => {
+  centroidOverlay.clearHover();
+});
 
 // --- Solo preview (hover an oscilloscope lane to isolate that partition) ---
 let hoverPartition: number | null = null;
@@ -292,14 +473,26 @@ function frame() {
   uniforms.uBumpDetail.value = cfg.bumpDetail;
   uniforms.uAmbient.value = cfg.ambient;
   uniforms.uBackground.value = cfg.backgroundTint;
-  renderer.render(scene, camera);
+  uniforms.uViewMode.value = 0;
+
+  const cloudView = cfg.view === "cloud";
+  controls.enabled = cloudView;
+  if (cloudView) {
+    controls.update();
+    const w = (uniforms.uResolution.value as THREE.Vector2).x;
+    const h = (uniforms.uResolution.value as THREE.Vector2).y;
+    renderCloudVolume(w, h);
+  } else {
+    renderer.render(scene, camera);
+  }
 
   // breathing readout on the left (highlight the soloed lane)
   breathePanel.classList.toggle("hidden", !cfg.breatheEnabled);
   if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime, hoverPartition);
 
-  // mask-layout overlay (superimposed mask shapes over their positions)
-  maskOverlay.draw(cfg);
+  // mask-layout overlay only makes sense over the flat panel.
+  maskOverlay.draw(cloudView ? { ...cfg, maskShowOverlay: false } : cfg, patternTime);
+  centroidOverlay.draw(cfg);
 
   // 3) stream to hardware at the configured data rate
   if (cfg.streamEnabled && streamer.isOpen && dirty) {

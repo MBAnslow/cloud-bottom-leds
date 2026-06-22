@@ -1,5 +1,5 @@
 import type { Config } from "./config";
-import { partitionCount, partitionCenters } from "./breathing";
+import { partitionCount, partitionCenters, maskRotationRad } from "./breathing";
 import { getMask, maskVersion } from "./mask";
 
 /**
@@ -82,7 +82,7 @@ export class MaskOverlay {
     }
   }
 
-  draw(cfg: Config) {
+  draw(cfg: Config, t: number = 0) {
     const show = cfg.maskShowOverlay && cfg.partitionLayout === "mask";
     if (!show) {
       if (this.canvas.style.display !== "none") {
@@ -106,7 +106,6 @@ export class MaskOverlay {
 
     const parts = partitionCount(cfg);
     const centers = partitionCenters(cfg);
-    if (!centers) return;
     const rect = this.sceneRect(cfg);
     const scale = Math.max(0.01, cfg.maskScale);
     // Match computeWeights: height = scale * scene height, width preserves the
@@ -127,22 +126,29 @@ export class MaskOverlay {
     ctx.imageSmoothingEnabled = true;
 
     for (let p = 0; p < parts; p++) {
+      const angle = maskRotationRad(cfg, t, p);
       const cx = rect.x + centers[p].x * rect.w;
       const cy = rect.y + centers[p].y * rect.h;
-      const x = cx - boxW / 2;
-      const y = cy - boxH / 2;
 
       if (haveSprites) {
         ctx.globalCompositeOperation = "lighter";
         ctx.globalAlpha = 0.7;
-        ctx.drawImage(this.sprites[p], x, y, boxW, boxH);
+        ctx.save();
+        ctx.translate(cx, cy);
+        if (angle !== 0) ctx.rotate(angle);
+        ctx.drawImage(this.sprites[p], -boxW / 2, -boxH / 2, boxW, boxH);
+        ctx.restore();
       } else {
         // no image loaded: just show the placement box outline
         ctx.globalCompositeOperation = "source-over";
         ctx.globalAlpha = 0.5;
         ctx.strokeStyle = cfg.breatheColors[p] ?? "#ffffff";
         ctx.lineWidth = 1.5;
-        ctx.strokeRect(x, y, boxW, boxH);
+        ctx.save();
+        ctx.translate(cx, cy);
+        if (angle !== 0) ctx.rotate(angle);
+        ctx.strokeRect(-boxW / 2, -boxH / 2, boxW, boxH);
+        ctx.restore();
       }
     }
 

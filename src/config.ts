@@ -1,6 +1,17 @@
 export type WiringOrder = "row-major" | "serpentine";
 
+/**
+ * Which preview to render: the flat build panel (true to the physical rect, for
+ * dialing in pitch/spread) or a representational lit cloud silhouette (to judge
+ * how the underside of a real cloud would look).
+ */
+export type ViewMode = "panel" | "cloud";
+export const VIEW_MODES: ViewMode[] = ["panel", "cloud"];
+
 export interface Config {
+  /** Which preview is shown on the main canvas. */
+  view: ViewMode;
+
   // --- Cloud dimensions (physical) ---
   /** Overall width of the cloud surface, in millimetres. */
   cloudWidthMm: number;
@@ -29,6 +40,12 @@ export interface Config {
   /** Diffuser opacity as a percentage of light blocked (0 = clear, 100 = opaque). Transmittance = 1 - opacity. */
   opacity: number;
 
+  // --- Cloud shape (3D volumetric view) ---
+  /** Vertical thickness of the cloud volume above the LED plane, in millimetres. */
+  cloudThicknessMm: number;
+  /** Overall optical density of the cloud volume (how thick/opaque it looks). */
+  cloudDensity: number;
+
   // --- Cloud surface shape ---
   /** Height/strength of the cloud bumps (also modulates local thickness/transmission). */
   bumpHeight: number;
@@ -45,8 +62,10 @@ export interface Config {
   speed: number;
   /** Pattern content level 0..1 (the color values, applied to both visual + hardware output). */
   brightness: number;
-  /** Color palette hue offset in degrees. */
+  /** Color/palette phase offset in degrees. */
   hueShift: number;
+  /** Palette selection per pattern (so each pattern can use a different palette). */
+  patternPalettes: Record<PatternName, PaletteName>;
 
   // --- Look ---
   /** Ambient base glow of the surface even with LEDs dark. */
@@ -85,6 +104,10 @@ export interface Config {
   maskScale: number;
   /** Superimpose the per-partition masks over their positions in the scene. */
   maskShowOverlay: boolean;
+  /** For the "mask" layout: animate a slow continuous rotation of the masks. */
+  maskRotate: boolean;
+  /** Rotation speed in degrees per minute (negative = opposite direction). */
+  maskRotateDegPerMin: number;
 
   // --- Streaming to real hardware ---
   streamEnabled: boolean;
@@ -153,11 +176,46 @@ export const BLEND_MODES: BlendMode[] = [
  * How overlapping partition oscillators combine into the single breathing layer
  * (before it is blended with the pattern). `average` is a weighted mean (the
  * natural blend); `additive` sums them so overlaps get brighter; `lighten`
- * keeps the brightest; `screen` is a softer brighten.
+ * keeps the brightest; `screen` is a softer brighten. Extra modes (`multiply`,
+ * `darken`, `difference`) are available for more stylised interactions.
  */
-export type OscBlend = "average" | "additive" | "lighten" | "screen";
+export type OscBlend =
+  | "average"
+  | "additive"
+  | "lighten"
+  | "screen"
+  | "multiply"
+  | "darken"
+  | "difference";
 
-export const OSC_BLENDS: OscBlend[] = ["average", "additive", "lighten", "screen"];
+export const OSC_BLENDS: OscBlend[] = [
+  "average",
+  "additive",
+  "lighten",
+  "screen",
+  "multiply",
+  "darken",
+  "difference",
+];
+
+export type PaletteName =
+  | "rainbow"
+  | "sunset"
+  | "ocean"
+  | "forest"
+  | "violet"
+  | "ember"
+  | "greyscale";
+
+export const PALETTE_NAMES: PaletteName[] = [
+  "rainbow",
+  "sunset",
+  "ocean",
+  "forest",
+  "violet",
+  "ember",
+  "greyscale",
+];
 
 export type PatternName =
   | "plasma"
@@ -181,6 +239,8 @@ export const PATTERN_NAMES: PatternName[] = [
 ];
 
 export const defaultConfig: Config = {
+  view: "panel",
+
   cloudWidthMm: 1200,
   cloudHeightMm: 600,
 
@@ -195,6 +255,9 @@ export const defaultConfig: Config = {
   diffuserScatterMm: 6,
   opacity: 35,
 
+  cloudThicknessMm: 450,
+  cloudDensity: 0.85,
+
   bumpHeight: 0.55,
   bumpScale: 2.4,
   bumpDetail: 4,
@@ -204,6 +267,16 @@ export const defaultConfig: Config = {
   speed: 1.0,
   brightness: 0.9,
   hueShift: 0,
+  patternPalettes: {
+    plasma: "rainbow",
+    rainbowWaves: "rainbow",
+    twinkle: "violet",
+    fire: "ember",
+    auroraDrift: "ocean",
+    breathe: "sunset",
+    rain: "ocean",
+    solid: "rainbow",
+  },
 
   ambient: 0.04,
   backgroundTint: 0.02,
@@ -223,6 +296,8 @@ export const defaultConfig: Config = {
   maskInvert: false,
   maskScale: 0.6,
   maskShowOverlay: false,
+  maskRotate: false,
+  maskRotateDegPerMin: 4,
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",
