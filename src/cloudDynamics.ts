@@ -53,13 +53,22 @@ function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
-/** Fill a greyscale cloud-dynamics layer (0..1) for compositing. */
-export function renderCloudDynamicsLayer(out: Float32Array, t: number, cfg: Config): void {
+/**
+ * Apply animated 2D cloud dynamics to the current LED layer.
+ * It modulates existing signal and also contributes a subtle standalone
+ * greyscale cloud field, so the effect remains visible even when breathing is
+ * off (or pattern is dark) and naturally mixes when colour layers are present.
+ */
+export function applyCloudDynamics(out: Float32Array, t: number, cfg: Config): void {
+  if (!cfg.cloudDynamicsEnabled) return;
+
   const rows = cfg.rows;
   const cols = cfg.cols;
   const scale = Math.max(0.15, cfg.cloudDynamicsScale);
   const speed = cfg.cloudDynamicsSpeed;
+  const amount = clamp01(cfg.cloudDynamicsAmount);
   const contrast = Math.max(0.2, cfg.cloudDynamicsContrast);
+  const colourMix = clamp01(cfg.cloudDynamicsWhiteMix); // 0=white, 1=full colour
 
   // Gentle anisotropic drift keeps the field from looking static/repeating.
   const tx = t * speed * 0.21;
@@ -80,11 +89,28 @@ export function renderCloudDynamicsLayer(out: Float32Array, t: number, cfg: Conf
       // Contrast remap around 0.5.
       n = clamp01(n);
       n = Math.pow(n, contrast);
+      const centered = n * 2 - 1; // -1..1
+      const mod = 1 + centered * amount;
+      // Standalone white cloud field when incoming signal is dark/off.
+      const cloudOnly = (0.08 + 0.92 * n) * amount;
 
       const o = (r * cols + c) * 3;
-      out[o] = n;
-      out[o + 1] = n;
-      out[o + 2] = n;
+      const sr = clamp01(out[o] * mod);
+      const sg = clamp01(out[o + 1] * mod);
+      const sb = clamp01(out[o + 2] * mod);
+
+      // Presence of coloured signal: when absent, keep pure white cloud field.
+      const presence = clamp01((Math.max(sr, sg, sb) - 0.01) / 0.24);
+      const cr = cloudOnly + (sr - cloudOnly) * presence;
+      const cg = cloudOnly + (sg - cloudOnly) * presence;
+      const cb = cloudOnly + (sb - cloudOnly) * presence;
+
+      // True white<->colour crossfade:
+      //   0 => complete white cloud field
+      //   1 => complete signal colour (where signal exists)
+      out[o] = clamp01(cloudOnly + (cr - cloudOnly) * colourMix);
+      out[o + 1] = clamp01(cloudOnly + (cg - cloudOnly) * colourMix);
+      out[o + 2] = clamp01(cloudOnly + (cb - cloudOnly) * colourMix);
     }
   }
 }

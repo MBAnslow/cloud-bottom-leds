@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { defaultConfig, type CloudSkyPreset, type Config } from "./config";
 import { LedField } from "./ledField";
 import { renderPattern } from "./patterns";
-import { renderCloudDynamicsLayer } from "./cloudDynamics";
+import { applyCloudDynamics } from "./cloudDynamics";
 import { fragmentShader, vertexShader } from "./cloudShader";
 import {
   fullscreenVertexShader,
@@ -13,7 +13,7 @@ import {
 import { Streamer, type StreamStatus } from "./streamer";
 import { buildGui } from "./gui";
 import { getLedType } from "./ledTypes";
-import { blendFn, renderBreathingLayer, renderPartitionSolo, partitionCount } from "./breathing";
+import { applyBreathing, renderPartitionSolo, partitionCount } from "./breathing";
 import { BreatheViz } from "./breatheViz";
 import { MaskOverlay } from "./maskOverlay";
 import { CentroidOverlay } from "./centroidOverlay";
@@ -406,123 +406,20 @@ vizCanvas.addEventListener("mouseleave", () => {
 });
 
 /**
- * Layer stack buffers (pattern, breathing source, cloud dynamics noise).
- */
-type StackLayerName = "pattern" | "breathing" | "cloud";
-let patternLayer = new Float32Array(0);
-let breathingLayer = new Float32Array(0);
-let breathingAlpha = new Float32Array(0);
-let cloudLayer = new Float32Array(0);
-
-function ensureLayerBuffers() {
-  const n = cfg.rows * cfg.cols;
-  const n3 = n * 3;
-  if (patternLayer.length !== n3) {
-    patternLayer = new Float32Array(n3);
-    breathingLayer = new Float32Array(n3);
-    cloudLayer = new Float32Array(n3);
-  }
-  if (breathingAlpha.length !== n) {
-    breathingAlpha = new Float32Array(n);
-  }
-}
-
-function clamp01(x: number): number {
-  return x < 0 ? 0 : x > 1 ? 1 : x;
-}
-
-function composeLayer(
-  dest: Float32Array,
-  src: Float32Array,
-  alpha: number | Float32Array,
-  mode: Config["breatheBlend"],
-  layer: StackLayerName,
-  first: boolean
-) {
-  const blendMode = first ? "normal" : mode;
-  const blend = blendFn(blendMode);
-  const n = cfg.rows * cfg.cols;
-  for (let i = 0; i < n; i++) {
-    const a = typeof alpha === "number" ? alpha : alpha[i];
-    if (a <= 1e-6) continue;
-    const o = i * 3;
-    const pr = dest[o];
-    const pg = dest[o + 1];
-    const pb = dest[o + 2];
-    const sr = src[o];
-    const sg = src[o + 1];
-    const sb = src[o + 2];
-    let nr: number;
-    let ng: number;
-    let nb: number;
-    if (layer === "breathing" && blendMode === "multiply") {
-      // For sparse patterns (e.g. rain), treat near-black backdrop as mostly
-      // transparent so empty regions don't erase breathing.
-      const presence = clamp01((Math.max(pr, pg, pb) - 0.02) / 0.35);
-      const br = sr + (pr * sr - sr) * presence;
-      const bg = sg + (pg * sg - sg) * presence;
-      const bb = sb + (pb * sb - sb) * presence;
-      nr = pr + (br - pr) * a;
-      ng = pg + (bg - pg) * a;
-      nb = pb + (bb - pb) * a;
-    } else {
-      nr = pr + (blend(pr, sr) - pr) * a;
-      ng = pg + (blend(pg, sg) - pg) * a;
-      nb = pb + (blend(pb, sb) - pb) * a;
-    }
-    // Keep the composite normalised.
-    dest[o] = clamp01(nr);
-    dest[o + 1] = clamp01(ng);
-    dest[o + 2] = clamp01(nb);
-  }
-}
-
-/**
- * Render the base buffer by compositing the configured layer stack.
+ * Fixed pipeline:
+ *   pattern -> breathing mix -> cloud dynamics modulation.
+ * User only chooses how breathing mixes with pattern (`breatheBlend`).
+ * Dynamics is applied to the composite so the cloud ripple remains visible even
+ * when breathing colour is dominant.
  */
 function renderBase(step: number) {
-  ensureLayerBuffers();
-  const n3 = cfg.rows * cfg.cols * 3;
   if (cfg.patternEnabled) {
-    renderPattern(patternLayer, patternTime, step, cfg);
+    renderPattern(ledField.colors, patternTime, step, cfg);
   } else {
-    patternLayer.fill(0);
+    ledField.colors.fill(0);
   }
-  renderBreathingLayer(breathingLayer, breathingAlpha, patternTime, cfg);
-  renderCloudDynamicsLayer(cloudLayer, patternTime, cfg);
-
-  ledField.colors.fill(0, 0, n3);
-  const order = cfg.layerOrder.split(">") as StackLayerName[];
-  let first = true;
-  for (const layer of order) {
-    if (layer === "pattern") {
-      if (!cfg.patternEnabled) continue;
-      composeLayer(ledField.colors, patternLayer, 1, cfg.patternBlend, "pattern", first);
-      first = false;
-    } else if (layer === "breathing") {
-      if (!cfg.breatheEnabled) continue;
-      composeLayer(
-        ledField.colors,
-        breathingLayer,
-        breathingAlpha,
-        cfg.breatheBlend,
-        "breathing",
-        first
-      );
-      first = false;
-    } else {
-      if (!cfg.cloudDynamicsEnabled || cfg.cloudDynamicsAmount <= 0) continue;
-      composeLayer(
-        ledField.colors,
-        cloudLayer,
-        cfg.cloudDynamicsAmount,
-        cfg.cloudDynamicsBlend,
-        "cloud",
-        first
-      );
-      first = false;
-    }
-  }
+  applyBreathing(ledField.colors, patternTime, cfg);
+  applyCloudDynamics(ledField.colors, patternTime, cfg);
 }
 
 /** Recompute the normal pattern+breathing buffer once (used when leaving a preview). */
@@ -584,6 +481,7 @@ function frame() {
   // (pattern off, all others off). Done every frame so it updates immediately.
   if (hoverPartition !== null) {
     renderPartitionSolo(ledField.colors, patternTime, cfg, hoverPartition);
+    applyCloudDynamics(ledField.colors, patternTime, cfg);
     dirty = true;
     wasPreviewing = true;
   } else if (wasPreviewing) {

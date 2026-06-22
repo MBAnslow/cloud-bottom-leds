@@ -73,8 +73,6 @@ export interface Config {
   hueShift: number;
   /** Palette selection per pattern (so each pattern can use a different palette). */
   patternPalettes: Record<PatternName, PaletteName>;
-  /** How the pattern layer blends with the layer stack underneath it. */
-  patternBlend: BlendMode;
   /** Post effect: add cloud-like motion after pattern + breathing. */
   cloudDynamicsEnabled: boolean;
   /** Noise style for cloud dynamics. */
@@ -87,10 +85,8 @@ export interface Config {
   cloudDynamicsSpeed: number;
   /** Contrast/definition of the dynamics noise. */
   cloudDynamicsContrast: number;
-  /** How the cloud-dynamics layer blends with the stack underneath it. */
-  cloudDynamicsBlend: BlendMode;
-  /** Order that the three layers are composited in. */
-  layerOrder: LayerOrder;
+  /** Cloud tint mix for dynamics: 0 = pure white cloud, 1 = full signal colour. */
+  cloudDynamicsWhiteMix: number;
 
   // --- Look ---
   /** Ambient base glow of the surface even with LEDs dark. */
@@ -195,23 +191,6 @@ export const BLEND_MODES: BlendMode[] = [
   "overlay",
   "softLight",
   "difference",
-];
-
-export type LayerOrder =
-  | "pattern>breathing>cloud"
-  | "pattern>cloud>breathing"
-  | "breathing>pattern>cloud"
-  | "breathing>cloud>pattern"
-  | "cloud>pattern>breathing"
-  | "cloud>breathing>pattern";
-
-export const LAYER_ORDERS: LayerOrder[] = [
-  "pattern>breathing>cloud",
-  "pattern>cloud>breathing",
-  "breathing>pattern>cloud",
-  "breathing>cloud>pattern",
-  "cloud>pattern>breathing",
-  "cloud>breathing>pattern",
 ];
 
 /**
@@ -329,15 +308,13 @@ export const defaultConfig: Config = {
     rain: "ocean",
     solid: "rainbow",
   },
-  patternBlend: "normal",
   cloudDynamicsEnabled: false,
   cloudDynamicsType: "fbm",
   cloudDynamicsAmount: 0.2,
   cloudDynamicsScale: 3.0,
   cloudDynamicsSpeed: 0.45,
   cloudDynamicsContrast: 1.2,
-  cloudDynamicsBlend: "overlay",
-  layerOrder: "pattern>breathing>cloud",
+  cloudDynamicsWhiteMix: 0.35,
 
   ambient: 0.04,
   backgroundTint: 0.02,

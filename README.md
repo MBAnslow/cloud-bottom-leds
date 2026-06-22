@@ -59,9 +59,12 @@ preview predicts what the real installation will look like.
   palette-shift. Palettes include `rainbow`, `sunset`, `ocean`, `forest`,
   `violet`, `ember`, and `greyscale`. `enable pattern` can be turned off to show
   the breathing layer on its own (the pattern becomes a black backdrop).
-- **Cloud dynamics** — a dedicated post-effect applied **after** pattern +
-  breathing to add moving cloud-like ripples. Controls: `noise` type (`value`,
-  `fbm`, `billow`, `ridged`), `amount`, `scale`, `speed`, and `contrast`.
+- **Cloud dynamics** — a dedicated cloud-motion effect that modulates the final
+  pattern+breathing composite to add moving cloud-like ripples (so it stays
+  visible even when breathing colour is dominant). Controls: `noise` type
+  (`value`, `fbm`, `billow`, `ridged`), `amount`, `scale`, `speed`, and
+  `contrast`, plus `cloud tint (white->colour)` where 0 is pure white cloud and
+  1 is full breathing/pattern colour.
 - **Breathing** — split the cloud into 2–6 partitions, each with its own base
   colour and a slow, phase-staggered "breathe" pulse layered over whatever
   pattern is running (the pulse is baked into the LED buffer, so the preview and
@@ -91,24 +94,20 @@ preview predicts what the real installation will look like.
   (with centre markers and P-labels) so you can see exactly where each colour
   sits; `clear mask` removes it.
 - **Blending** — its own menu, controlling how the layers combine.
-  `layer order` lets you choose the stack order of `pattern`, `breathing`, and
-  `cloud` dynamics.
-  `pattern with stack`, `breathing with stack`, and `cloud with stack` set a
-  blend mode per layer (`normal`, `additive`, `screen`, `multiply`, `lighten`,
-  `darken`, `overlay`, `softLight`, `difference`) and the result is normalised
-  to 0..1 per channel.
   `oscillators with each other` sets how overlapping partition pulses merge
   (`average` weighted mean, `additive` so overlaps brighten, `lighten` keeps the
   brightest, `screen` for a softer brighten, `multiply`, `darken`, or
   `difference` for more stylised interaction). `breath opacity` controls how
-  strongly the breathing layer contributes.
+  strongly the breathing layer contributes. `breathing with pattern` chooses how
+  breathing (dominant colour) mixes with the cloud-shaped pattern, and the final
+  composite is normalised to 0..1 per channel.
 
 The controls are split into two side menus: on the **right**, the **view**
 selector and **Hardware** (cloud size, LED grid, diffuser, streaming); on the
 **left**, **Pattern** (the
 animated content and the cloud surface look), **Breathing** (layout/mask,
-overlap, rate/depth/stagger), and **Blending** (layer order, per-layer stack
-blends, oscillator blending, breath opacity). The LED cloud sits centred between them, and the
+overlap, rate/depth/stagger), and **Blending** (pattern+breathing mix,
+oscillator blending, breath opacity). The LED cloud sits centred between them, and the
 breathing oscilloscope runs along the bottom centre — the **partition count**
 and the **per-partition colours** live right there in the oscilloscope panel.
 - **Live hardware streaming** — pushes frames to a [WLED](https://kno.wled.ge/)

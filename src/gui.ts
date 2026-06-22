@@ -4,7 +4,6 @@ import {
   PALETTE_NAMES,
   PARTITION_LAYOUTS,
   BLEND_MODES,
-  LAYER_ORDERS,
   CLOUD_DYNAMICS_NOISES,
   CLOUD_SKY_PRESETS,
   OSC_BLENDS,
@@ -145,6 +144,7 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   dyn.add(cfg, "cloudDynamicsScale", 0.2, 10, 0.05).name("scale");
   dyn.add(cfg, "cloudDynamicsSpeed", 0, 2.5, 0.01).name("speed");
   dyn.add(cfg, "cloudDynamicsContrast", 0.2, 3, 0.01).name("contrast");
+  dyn.add(cfg, "cloudDynamicsWhiteMix", 0, 1, 0.01).name("cloud tint (white->colour)");
 
   const cloud = pat.addFolder("Cloud surface");
   cloud.add(cfg, "bumpHeight", 0, 1.5, 0.01).name("bumpiness");
@@ -245,10 +245,7 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   // BLENDING — how the layers combine: the partition oscillators with each
   // other, and the resulting breathing layer over the pattern.
   const blend = left.addFolder("Blending");
-  blend.add(cfg, "layerOrder", LAYER_ORDERS).name("layer order");
-  blend.add(cfg, "patternBlend", BLEND_MODES).name("pattern with stack");
   blend.add(cfg, "partitionBlend", OSC_BLENDS).name("oscillators with each other");
-  blend.add(cfg, "breatheBlend", BLEND_MODES).name("breathing with stack");
-  blend.add(cfg, "cloudDynamicsBlend", BLEND_MODES).name("cloud with stack");
+  blend.add(cfg, "breatheBlend", BLEND_MODES).name("breathing with pattern");
   blend.add(cfg, "breatheMix", 0, 1, 0.01).name("breath opacity");
 }
