@@ -7,10 +7,20 @@
     <style>
       :root {
         color-scheme: dark;
-        /* Space reserved for the side menus and the bottom oscilloscope so the
-           LED cloud sits centred between them and never overlaps a menu. */
-        --ui-side: 270px;
-        --ui-bottom: calc(30vh + 24px);
+        /* Layout: top half = breathing + LED, bottom half = two menus. */
+        --ui-pad: 10px;
+        --ui-gap: 10px;
+        /* Reserve enough vertical space for the 4-line status HUD. */
+        --ui-hud-h: 92px;
+        --ui-mid: 50vh;
+        --ui-top-start: calc(var(--ui-pad) + var(--ui-hud-h) + var(--ui-gap));
+        --ui-top-end: calc(var(--ui-mid) - var(--ui-gap) * 0.5);
+        --ui-breathe-h: clamp(110px, 12vh, 150px);
+        --ui-hist-h: 52px;
+        --ui-app-top: calc(var(--ui-top-start) + var(--ui-breathe-h) + var(--ui-gap));
+        --ui-app-h: calc(var(--ui-top-end) - var(--ui-app-top) - var(--ui-hist-h) - var(--ui-gap));
+        --ui-menu-top: calc(var(--ui-mid) + var(--ui-gap) * 0.5);
+        --ui-menu-h: calc(100vh - var(--ui-menu-top) - var(--ui-pad));
       }
       * {
         box-sizing: border-box;
@@ -25,10 +35,10 @@
       }
       #app {
         position: fixed;
-        top: 8px;
-        left: var(--ui-side);
-        right: var(--ui-side);
-        bottom: var(--ui-bottom);
+        top: var(--ui-app-top);
+        left: var(--ui-pad);
+        right: var(--ui-pad);
+        height: var(--ui-app-h);
       }
       #app canvas {
         display: block;
@@ -56,6 +66,20 @@
       #hud b {
         color: #fff;
       }
+      /* RGB histogram of the streamed bytes, docked just under the LED view. */
+      #stream-hist {
+        position: fixed;
+        left: var(--ui-pad);
+        right: var(--ui-pad);
+        bottom: calc(100vh - var(--ui-top-end));
+        height: var(--ui-hist-h);
+        z-index: 9;
+        border-radius: 8px;
+        background: rgba(10, 12, 20, 0.55);
+        backdrop-filter: blur(8px);
+        pointer-events: none;
+        user-select: none;
+      }
       #hud .dot {
         display: inline-block;
         width: 8px;
@@ -73,16 +97,39 @@
         background: #f87171;
         box-shadow: 0 0 8px #f87171;
       }
+      #config-actions {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 12;
+        display: flex;
+        gap: 8px;
+      }
+      #config-actions button {
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(10, 12, 20, 0.62);
+        color: #cfd6e6;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      #config-actions button:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
       #breathe-panel {
         position: fixed;
         left: 50%;
-        bottom: 12px;
+        top: var(--ui-top-start);
+        bottom: auto;
         transform: translateX(-50%);
         z-index: 10;
-        width: min(62vw, 760px);
-        height: 30vh;
-        max-height: 340px;
-        min-height: 150px;
+        width: min(46vw, 560px);
+        height: var(--ui-breathe-h);
+        min-height: 110px;
         padding: 8px 12px 10px;
         border-radius: 12px;
         background: rgba(10, 12, 20, 0.55);
@@ -161,9 +208,21 @@
         pointer-events: auto;
         cursor: crosshair;
       }
+      .lil-gui {
+        z-index: 11;
+      }
+      .lil-gui.autoPlace {
+        top: var(--ui-menu-top);
+        max-height: var(--ui-menu-h);
+        overflow-y: auto;
+      }
     </style>
   </head>
   <body>
+    <div id="config-actions">
+      <button id="cfg-save" type="button">Save</button>
+      <button id="cfg-load" type="button">Load</button>
+    </div>
     <div id="app"></div>
     <div id="breathe-panel">
       <div id="breathe-head">
@@ -187,6 +246,7 @@
       <div id="hud-fps">—</div>
       <div><span id="hud-stream-dot" class="dot"></span><span id="hud-stream">stream: off</span></div>
     </div>
+    <canvas id="stream-hist" width="512" height="52"></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

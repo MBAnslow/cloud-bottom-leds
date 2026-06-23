@@ -80,58 +80,14 @@ export const volumeFragmentShader = /* glsl */ `
   uniform vec3  uBoxHalf;       // half extents: x, height(y from 0), z
 
   uniform float uCloudDensity;  // overall optical thickness scale
-  uniform float uBumpScale;     // puff frequency
-  uniform float uBumpHeight;    // puff lumpiness 0..~1.5
-  uniform int   uBumpDetail;    // fbm octaves
   uniform float uAmbient;       // base self-lit fill
   uniform float uTransmission;  // diffuser transmittance (dims the light)
   uniform float uLightReach;    // how far light climbs before fading (0..1 of height)
   uniform vec3  uSkyBottom;     // cloud-view background gradient (bottom)
   uniform vec3  uSkyTop;        // cloud-view background gradient (top)
 
-  // --- 3D value noise / fbm ---
-  float hash31(vec3 p) {
-    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-  }
-  float vnoise(vec3 x) {
-    vec3 i = floor(x);
-    vec3 f = fract(x);
-    f = f * f * (3.0 - 2.0 * f);
-    float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
-    float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
-    float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
-    float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
-    float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
-    float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
-    float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
-    float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
-    float nx00 = mix(n000, n100, f.x);
-    float nx10 = mix(n010, n110, f.x);
-    float nx01 = mix(n001, n101, f.x);
-    float nx11 = mix(n011, n111, f.x);
-    float nxy0 = mix(nx00, nx10, f.y);
-    float nxy1 = mix(nx01, nx11, f.y);
-    return mix(nxy0, nxy1, f.z);
-  }
-  float fbm3(vec3 p) {
-    float s = 0.0;
-    float a = 0.5;
-    float norm = 0.0;
-    for (int i = 0; i < 6; i++) {
-      if (i >= uBumpDetail) break;
-      s += a * vnoise(p);
-      norm += a;
-      p *= 2.0;
-      a *= 0.5;
-    }
-    return norm > 0.0 ? s / norm : 0.0;
-  }
-
-  // Cloud density at a world point inside the box. A rounded cumulus dome
-  // (wide flat base, billowing top) carved out of fbm noise, so the silhouette
-  // reads as a real puffy cloud rather than a flat slab.
+  // Cloud density at a world point inside the box: smooth dome-like body
+  // without bump/noise controls.
   float densityAt(vec3 P) {
     vec3 h = uBoxHalf;
     // Normalised position so noise frequency is independent of physical size.
@@ -142,19 +98,11 @@ export const volumeFragmentShader = /* glsl */ `
     // Base dome profile: max radius allowed shrinks toward the top
     // (quarter-ellipse), giving a rounded heap that's wide at the base.
     float dome = sqrt(max(0.0, 1.0 - cy * cy));
-
-    // Push the boundary in and out with low-frequency noise so the silhouette
-    // breaks into billowing cauliflower lumps instead of a clean arc.
-    float bump = clamp(uBumpHeight, 0.0, 1.2);
-    float bill = fbm3(np * (uBumpScale * 0.85) + 3.7);
-    float boundary = dome + (bill - 0.5) * (0.55 + 0.7 * bump);
-    float env = smoothstep(boundary + 0.12, boundary - 0.04, r);
+    float env = smoothstep(dome + 0.10, dome - 0.03, r);
     if (env <= 0.0) return 0.0;
 
-    // Interior detail so the body isn't a uniform fog, plus a fuller flat base
-    // so the LEDs are genuinely embedded inside the bottom of the cloud.
-    float fine = fbm3(np * (uBumpScale * 1.9) + 8.1);
-    float d = env * mix(0.8, fine, 0.45 * bump);
+    // Keep a fuller flat base so the LEDs are embedded inside the bottom.
+    float d = env * 0.82;
     float baseFill = (1.0 - smoothstep(0.0, 0.16, cy)) * env;
     d = max(d, baseFill);
     return clamp(d, 0.0, 1.0) * uCloudDensity;

@@ -164,6 +164,7 @@ function ensureState(n: number) {
 }
 
 const rgb: number[] = [0, 0, 0];
+const AURORA_NOISE_SCALE = 2.4;
 
 /**
  * Compute one frame of LED colors.
@@ -246,8 +247,8 @@ const PATTERNS: Record<PatternName, PatternFn> = {
     paletteHSV(palette, hue + 0.02 + heat * 0.12, 1.0, heat, out);
   },
 
-  auroraDrift(u, v, t, _dt, _i, hue, palette, cfg, out) {
-    const n = fbm(u * cfg.bumpScale + t * 0.15, v * cfg.bumpScale - t * 0.1, 4);
+  auroraDrift(u, v, t, _dt, _i, hue, palette, _cfg, out) {
+    const n = fbm(u * AURORA_NOISE_SCALE + t * 0.15, v * AURORA_NOISE_SCALE - t * 0.1, 4);
     const band = Math.sin(v * 3.0 + n * 3.0 + t * 0.5) * 0.5 + 0.5;
     const h = hue + 0.45 + n * 0.35; // greens -> teals -> violets
     paletteHSV(palette, h, 0.8, 0.15 + band * band * 0.85, out);

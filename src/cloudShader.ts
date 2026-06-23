@@ -24,42 +24,10 @@ export const fragmentShader = /* glsl */ `
   uniform float uWhiteMix;   // RGBW white-die contribution (0 for RGB types)
   uniform float uTransmission; // diffuser transmittance 0..1 (1 - opacity)
 
-  uniform float uBumpHeight;
-  uniform float uBumpScale;
-  uniform int   uBumpDetail;
-
   uniform float uAmbient;
   uniform float uBackground;
 
   uniform int   uViewMode;   // 0 = flat build panel, 1 = lit cloud silhouette
-
-  // --- value noise / fbm for the cloud surface ---
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-      u.y
-    );
-  }
-  float fbm(vec2 p) {
-    float s = 0.0;
-    float a = 0.5;
-    float norm = 0.0;
-    for (int i = 0; i < 6; i++) {
-      if (i >= uBumpDetail) break;
-      s += a * noise(p);
-      norm += a;
-      p *= 2.0;
-      a *= 0.5;
-    }
-    return norm > 0.0 ? s / norm : 0.0;
-  }
 
   vec3 ledColor(float c, float r) {
     return texture2D(uLeds, vec2((c + 0.5) / uCols, (r + 0.5) / uRows)).rgb;
@@ -156,18 +124,8 @@ export const fragmentShader = /* glsl */ `
       }
     }
 
-    // --- cloud surface from fbm (static physical surface) ---
-    // scale x by aspect so bumps stay round on non-square panels
-    vec2 q = vec2(uv.x * uCloudAspect, uv.y) * uBumpScale;
-    float h = fbm(q);
-
-    // surface normal from height gradient -> bump shading
-    float eps = 0.015 * uBumpScale;
-    float hx = fbm(q + vec2(eps, 0.0)) - fbm(q - vec2(eps, 0.0));
-    float hy = fbm(q + vec2(0.0, eps)) - fbm(q - vec2(0.0, eps));
-    vec3 n = normalize(vec3(-hx * uBumpHeight * 12.0, -hy * uBumpHeight * 12.0, 1.0));
-    vec3 keyDir = normalize(vec3(-0.35, 0.5, 0.78));
-    float shade = clamp(dot(n, keyDir), 0.0, 1.0);
+    // Flat static cloud surface shading (no bumpiness controls).
+    float shade = 0.72;
 
     vec3 cloudTint = vec3(0.92, 0.95, 1.0);
 
@@ -182,10 +140,7 @@ export const fragmentShader = /* glsl */ `
       float A = uCloudAspect;
       vec2 a = vec2(uv.x * A, uv.y);
 
-      // Wobble the sample so the lobe edges are irregular; tied to bumpiness.
-      vec2 wob = (vec2(fbm(a * uBumpScale + 11.3), fbm(a * uBumpScale + 37.7)) - 0.5)
-                 * 0.12 * (0.4 + uBumpHeight);
-      vec2  a2 = a + wob;
+      vec2 a2 = a;
 
       // f in [0,1]; the silhouette boundary sits at ~0.5.
       float f = cloudField(a2, A);
@@ -222,7 +177,7 @@ export const fragmentShader = /* glsl */ `
       // The bumpy cloud is an additive relief layer sitting on top: front-lit
       // ridges, shadowed valleys, without distorting the LED spots.
       float relief = mix(0.12, 1.0, shade);
-      float reliefStrength = 0.05 + 0.22 * uBumpHeight;
+      float reliefStrength = 0.11;
       vec3 cloudBody = cloudTint * (uAmbient + reliefStrength * relief);
       col = transmitted + cloudBody;
       col += vec3(0.05, 0.07, 0.13) * uBackground;

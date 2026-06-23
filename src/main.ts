@@ -11,14 +11,67 @@ import {
   volumeFragmentShader,
 } from "./cloudVolumeShader";
 import { Streamer, type StreamStatus } from "./streamer";
-import { buildGui } from "./gui";
-import { getLedType } from "./ledTypes";
+import { buildGui, type GuiHandle } from "./gui";
+import { getLedType, maxGrid } from "./ledTypes";
 import { applyBreathing, renderPartitionSolo, partitionCount } from "./breathing";
 import { BreatheViz } from "./breatheViz";
 import { MaskOverlay } from "./maskOverlay";
 import { CentroidOverlay } from "./centroidOverlay";
 
-const cfg: Config = { ...defaultConfig };
+const DEFAULT_CONFIG_STORAGE_KEY = "cloud-bottom-leds.default-config.v1";
+
+function cloneConfig(src: Config): Config {
+  return {
+    ...src,
+    breatheColors: [...src.breatheColors],
+    patternPalettes: { ...src.patternPalettes },
+  };
+}
+
+function applyConfig(target: Config, source: Partial<Config>) {
+  for (const key of Object.keys(defaultConfig) as Array<keyof Config>) {
+    if (!(key in source)) continue;
+    const next = source[key];
+    if (next === undefined) continue;
+    if (key === "breatheColors" && Array.isArray(next)) {
+      target.breatheColors = [...next];
+      continue;
+    }
+    if (key === "patternPalettes" && typeof next === "object" && next) {
+      target.patternPalettes = {
+        ...defaultConfig.patternPalettes,
+        ...(next as Config["patternPalettes"]),
+      };
+      continue;
+    }
+    (target[key] as Config[keyof Config]) = next as Config[keyof Config];
+  }
+}
+
+function readStoredDefaultConfig(): Partial<Config> | null {
+  try {
+    const raw = localStorage.getItem(DEFAULT_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as Partial<Config>;
+  } catch {
+    return null;
+  }
+}
+
+function saveDefaultConfig(cfg: Config) {
+  localStorage.setItem(DEFAULT_CONFIG_STORAGE_KEY, JSON.stringify(cloneConfig(cfg)));
+}
+
+const cfg = cloneConfig(defaultConfig);
+const savedDefault = readStoredDefaultConfig();
+if (savedDefault) applyConfig(cfg, savedDefault);
+{
+  const { maxCols, maxRows } = maxGrid(cfg.ledType, cfg.cloudWidthMm, cfg.cloudHeightMm);
+  cfg.cols = Math.max(1, Math.min(cfg.cols, maxCols));
+  cfg.rows = Math.max(1, Math.min(cfg.rows, maxRows));
+}
 
 // --- Three.js setup ---
 const container = document.getElementById("app")!;
@@ -88,12 +141,9 @@ const uniforms: Record<string, THREE.IUniform> = {
   uRows: { value: cfg.rows },
   uCloudAspect: { value: cfg.cloudWidthMm / cfg.cloudHeightMm },
   uSigma: { value: new THREE.Vector2(1, 1) },
-  uLedGain: { value: cfg.ledBrightness },
+  uLedGain: { value: 1 },
   uWhiteMix: { value: 0 },
   uTransmission: { value: 1 - cfg.opacity / 100 },
-  uBumpHeight: { value: cfg.bumpHeight },
-  uBumpScale: { value: cfg.bumpScale },
-  uBumpDetail: { value: cfg.bumpDetail },
   uAmbient: { value: cfg.ambient },
   uBackground: { value: cfg.backgroundTint },
   uViewMode: { value: cfg.view === "cloud" ? 1 : 0 },
@@ -132,7 +182,7 @@ const emissionUniforms: Record<string, THREE.IUniform> = {
   uCols: { value: cfg.cols },
   uRows: { value: cfg.rows },
   uSigma: { value: uniforms.uSigma.value },
-  uLedGain: { value: cfg.ledBrightness },
+  uLedGain: { value: 1 },
   uWhiteMix: { value: 0 },
 };
 const emissionScene = new THREE.Scene();
@@ -161,9 +211,6 @@ const volUniforms: Record<string, THREE.IUniform> = {
   uEmission: { value: emissionRT.texture },
   uBoxHalf: { value: new THREE.Vector3(0.5, 0.4, 0.5) },
   uCloudDensity: { value: cfg.cloudDensity },
-  uBumpScale: { value: cfg.bumpScale },
-  uBumpHeight: { value: cfg.bumpHeight },
-  uBumpDetail: { value: cfg.bumpDetail },
   uAmbient: { value: cfg.ambient },
   uTransmission: { value: 1 - cfg.opacity / 100 },
   uLightReach: { value: 0.5 },
@@ -230,7 +277,7 @@ function renderCloudVolume(w: number, h: number) {
   emissionUniforms.uRows.value = cfg.rows;
   emissionUniforms.uSigma.value = uniforms.uSigma.value;
   const led = getLedType(cfg.ledType);
-  emissionUniforms.uLedGain.value = cfg.ledBrightness * led.relBrightness;
+  emissionUniforms.uLedGain.value = 1;
   emissionUniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
   renderer.setRenderTarget(emissionRT);
   renderer.render(emissionScene, camera);
@@ -247,9 +294,6 @@ function renderCloudVolume(w: number, h: number) {
   (volUniforms.uResolution.value as THREE.Vector2).set(w, h);
   cloudBoxHalf(volUniforms.uBoxHalf.value as THREE.Vector3);
   volUniforms.uCloudDensity.value = cfg.cloudDensity;
-  volUniforms.uBumpScale.value = cfg.bumpScale;
-  volUniforms.uBumpHeight.value = cfg.bumpHeight;
-  volUniforms.uBumpDetail.value = cfg.bumpDetail;
   volUniforms.uAmbient.value = cfg.ambient;
   volUniforms.uTransmission.value = 1 - cfg.opacity / 100;
   const sky = CLOUD_SKIES[cfg.cloudSky];
@@ -286,26 +330,52 @@ function applyStreaming() {
     streamer.connect(cfg, ledField.count);
   } else {
     streamer.disconnect();
+    queuedStreamFrame = null;
   }
 }
 
+function onLayoutChange() {
+  ledField.resize(cfg);
+  uniforms.uLeds.value = ledField.texture;
+  uniforms.uCols.value = cfg.cols;
+  uniforms.uRows.value = cfg.rows;
+  queuedStreamFrame = null;
+  if (cfg.streamEnabled) streamer.reconfigure(cfg, ledField.count);
+}
+
+function loadDefaultConfigIntoSession() {
+  const saved = readStoredDefaultConfig();
+  if (saved) {
+    applyConfig(cfg, saved);
+  } else {
+    applyConfig(cfg, defaultConfig);
+  }
+  const { maxCols, maxRows } = maxGrid(cfg.ledType, cfg.cloudWidthMm, cfg.cloudHeightMm);
+  cfg.cols = Math.max(1, Math.min(cfg.cols, maxCols));
+  cfg.rows = Math.max(1, Math.min(cfg.rows, maxRows));
+  onLayoutChange();
+  rebuildSwatches();
+  refreshBuffer();
+  applyStreaming();
+  guiHandle?.refreshFromConfig();
+}
+
 // --- GUI ---
-buildGui(cfg, {
-  onLayoutChange: () => {
-    ledField.resize(cfg);
-    uniforms.uLeds.value = ledField.texture;
-    uniforms.uCols.value = cfg.cols;
-    uniforms.uRows.value = cfg.rows;
-    if (cfg.streamEnabled) streamer.reconfigure(cfg, ledField.count);
-  },
+let guiHandle: GuiHandle | null = null;
+guiHandle = buildGui(cfg, {
+  onLayoutChange,
   onStreamToggle: applyStreaming,
   onStreamReconfigure: () => streamer.reconfigure(cfg, ledField.count),
 });
 
+const saveDefaultBtn = document.getElementById("cfg-save");
+const loadDefaultBtn = document.getElementById("cfg-load");
+saveDefaultBtn?.addEventListener("click", () => saveDefaultConfig(cfg));
+loadDefaultBtn?.addEventListener("click", loadDefaultConfigIntoSession);
+
 // --- Resize ---
-// The cloud canvas fills its (#app) container, which is inset from the side
-// menus and the bottom oscilloscope, so the cloud stays centred and clear of
-// the UI. Size the renderer to the container, not the whole window.
+// The cloud canvas fills the middle display region (#app), with breathing above
+// and the two menu columns below, so size from the container not the window.
 function onResize() {
   const w = Math.max(1, container.clientWidth);
   const h = Math.max(1, container.clientHeight);
@@ -420,6 +490,7 @@ function renderBase(step: number) {
   }
   applyBreathing(ledField.colors, patternTime, cfg);
   applyCloudDynamics(ledField.colors, patternTime, cfg);
+  applyEmitterDrive(ledField.colors, cfg);
 }
 
 /** Recompute the normal pattern+breathing buffer once (used when leaving a preview). */
@@ -436,6 +507,75 @@ let fpsAccum = 0;
 let fpsFrames = 0;
 let fpsTimer = 0;
 
+// --- Streamed-bytes RGB histogram (top HUD) ---
+const histCanvas = document.getElementById("stream-hist") as HTMLCanvasElement;
+const histCtx = histCanvas.getContext("2d");
+// 16 bins, each spanning 16 byte values (0..255).
+const HIST_BIN_WIDTH = 16;
+const HIST_BINS = 256 / HIST_BIN_WIDTH;
+const histR = new Float32Array(HIST_BINS);
+const histG = new Float32Array(HIST_BINS);
+const histB = new Float32Array(HIST_BINS);
+
+/** Draw a per-channel histogram (R,G,B) of the exact bytes sent to the strips. */
+function drawStreamHistogram(bytes: Uint8Array) {
+  if (!histCtx) return;
+  const W = histCanvas.width;
+  const H = histCanvas.height;
+  const axisH = 12; // reserved strip for the 0..255 axis labels
+  const plotH = H - axisH;
+  histR.fill(0);
+  histG.fill(0);
+  histB.fill(0);
+  for (let i = 0; i + 2 < bytes.length; i += 3) {
+    histR[(bytes[i] / HIST_BIN_WIDTH) | 0]++;
+    histG[(bytes[i + 1] / HIST_BIN_WIDTH) | 0]++;
+    histB[(bytes[i + 2] / HIST_BIN_WIDTH) | 0]++;
+  }
+  // Shared scale across channels so relative heights are meaningful.
+  let peak = 1;
+  for (let b = 0; b < HIST_BINS; b++) {
+    if (histR[b] > peak) peak = histR[b];
+    if (histG[b] > peak) peak = histG[b];
+    if (histB[b] > peak) peak = histB[b];
+  }
+  const norm = plotH / (Math.log1p(peak) || 1);
+  const binW = W / HIST_BINS;
+
+  histCtx.clearRect(0, 0, W, H);
+
+  // Per-bin grouped bars (R, G, B side by side within each bin).
+  const gap = Math.max(1, binW * 0.08);
+  const barW = (binW - gap * 2) / 3;
+  const channels: Array<[Float32Array, string]> = [
+    [histR, "rgba(255,80,80,0.95)"],
+    [histG, "rgba(70,225,110,0.95)"],
+    [histB, "rgba(95,155,255,0.95)"],
+  ];
+  for (let b = 0; b < HIST_BINS; b++) {
+    const x0 = b * binW + gap;
+    for (let ch = 0; ch < 3; ch++) {
+      const [hist, color] = channels[ch];
+      const h = Math.log1p(hist[b]) * norm;
+      histCtx.fillStyle = color;
+      histCtx.fillRect(x0 + ch * barW, plotH - h, barW, h);
+    }
+  }
+
+  // Axis: 0 .. 255 so it's clear this is RGB byte space.
+  histCtx.fillStyle = "rgba(255,255,255,0.10)";
+  histCtx.fillRect(0, plotH, W, 1);
+  histCtx.fillStyle = "rgba(207,214,230,0.8)";
+  histCtx.font = "9px ui-sans-serif, system-ui, sans-serif";
+  histCtx.textBaseline = "bottom";
+  const ticks = [0, 64, 128, 192, 255];
+  for (const t of ticks) {
+    const x = (t / 255) * W;
+    histCtx.textAlign = t === 0 ? "left" : t === 255 ? "right" : "center";
+    histCtx.fillText(String(t), Math.min(W - 1, Math.max(1, x)), H);
+  }
+}
+
 // --- Render loop ---
 const clock = new THREE.Clock();
 // The pattern advances on its own fixed-rate clock so we can simulate the real
@@ -443,6 +583,14 @@ const clock = new THREE.Clock();
 let patternTime = 0;
 let patternAccum = 0;
 let dirty = true; // LED colors changed -> re-upload + (maybe) stream
+let queuedStreamFrame: Uint8Array | null = null;
+
+function applyEmitterDrive(out: Float32Array, cfg: Config) {
+  const led = getLedType(cfg.ledType);
+  const gain = cfg.ledBrightness * led.relBrightness;
+  if (Math.abs(gain - 1) < 1e-6) return;
+  for (let i = 0; i < out.length; i++) out[i] *= gain;
+}
 
 // Cap rendering at 60fps; there's nothing to gain past it (the diffuser is
 // static and the pattern has its own update rate), so skip extra frames on
@@ -482,6 +630,7 @@ function frame() {
   if (hoverPartition !== null) {
     renderPartitionSolo(ledField.colors, patternTime, cfg, hoverPartition);
     applyCloudDynamics(ledField.colors, patternTime, cfg);
+    applyEmitterDrive(ledField.colors, cfg);
     dirty = true;
     wasPreviewing = true;
   } else if (wasPreviewing) {
@@ -496,12 +645,9 @@ function frame() {
   uniforms.uTime.value = patternTime;
   uniforms.uCloudAspect.value = cfg.cloudWidthMm / Math.max(1, cfg.cloudHeightMm);
   computeSigma(uniforms.uSigma.value as THREE.Vector2);
-  uniforms.uLedGain.value = cfg.ledBrightness * led.relBrightness;
+  uniforms.uLedGain.value = 1;
   uniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
   uniforms.uTransmission.value = 1 - cfg.opacity / 100;
-  uniforms.uBumpHeight.value = cfg.bumpHeight;
-  uniforms.uBumpScale.value = cfg.bumpScale;
-  uniforms.uBumpDetail.value = cfg.bumpDetail;
   uniforms.uAmbient.value = cfg.ambient;
   uniforms.uBackground.value = cfg.backgroundTint;
   uniforms.uViewMode.value = 0;
@@ -526,8 +672,19 @@ function frame() {
   centroidOverlay.draw(cfg);
 
   // 3) stream to hardware at the configured data rate
-  if (cfg.streamEnabled && streamer.isOpen && dirty) {
-    streamer.sendFrame(ledField.toBytes(cfg.wiring), cfg.streamFps, now);
+  if (dirty) {
+    const nextFrame = ledField.toBytes(cfg.wiring, cfg.streamGamma, cfg.streamExposure);
+    // Stream exactly the same LED RGB buffer the renderer used, delayed by one
+    // frame so we forward the already-rendered frame, not a newly-written one.
+    if (cfg.streamEnabled && streamer.isOpen && queuedStreamFrame) {
+      streamer.sendFrame(queuedStreamFrame, cfg.streamFps, now);
+    }
+    queuedStreamFrame = nextFrame;
+    // Histogram of the exact bytes we (would) stream.
+    drawStreamHistogram(nextFrame);
+  }
+  if (!cfg.streamEnabled || !streamer.isOpen) {
+    queuedStreamFrame = null;
   }
   dirty = false;
 

@@ -22,9 +22,29 @@ export interface GuiHooks {
   onStreamReconfigure: () => void;
 }
 
-export function buildGui(cfg: Config, hooks: GuiHooks): void {
+export interface GuiHandle {
+  refreshFromConfig: () => void;
+}
+
+export function buildGui(cfg: Config, hooks: GuiHooks): GuiHandle {
   // Right-hand menu: the hardware build + the animated pattern.
   const gui = new GUI({ title: "Cloud Bottom LEDs" });
+  gui.domElement.style.top = "var(--ui-menu-top)";
+  gui.domElement.style.left = "auto";
+  gui.domElement.style.right = "10px";
+  gui.domElement.style.width = "calc((100vw - 30px) / 2)";
+  gui.domElement.style.maxHeight = "var(--ui-menu-h)";
+  gui.domElement.style.overflowY = "auto";
+
+  const refreshControllers = (root: GUI) => {
+    const list =
+      (
+        root as unknown as {
+          controllersRecursive?: () => Array<{ updateDisplay: () => void }>;
+        }
+      ).controllersRecursive?.() ?? [];
+    for (const ctrl of list) ctrl.updateDisplay();
+  };
 
   // View selector: flat build panel vs. the 3D volumetric lit cloud (orbit by
   // click-dragging the canvas).
@@ -105,7 +125,11 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   stream.add(cfg, "wledHost").name("WLED IP").onFinishChange(hooks.onStreamReconfigure);
   stream.add(cfg, "wledPort", 1, 65535, 1).name("UDP port").onFinishChange(hooks.onStreamReconfigure);
   stream.add(cfg, "bridgeUrl").name("bridge ws");
-  stream.add(cfg, "wiring", ["row-major", "serpentine"]).name("wiring");
+  stream
+    .add(cfg, "wiring", ["row-major", "serpentine", "column-major", "column-serpentine"])
+    .name("wiring");
+  stream.add(cfg, "streamExposure", 0.1, 4, 0.01).name("exposure");
+  stream.add(cfg, "streamGamma", 0.4, 3, 0.05).name("gamma (1 = linear)");
   stream.add(cfg, "streamFps", 1, 60, 1).name("stream fps");
   stream.close();
 
@@ -113,8 +137,12 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   // LEFT MENU — Pattern + Breathing, pinned to the LEFT of the screen.
   // =====================================================================
   const left = new GUI({ title: "Pattern & Breathing" });
-  left.domElement.style.left = "0px";
+  left.domElement.style.top = "var(--ui-menu-top)";
+  left.domElement.style.left = "10px";
   left.domElement.style.right = "auto";
+  left.domElement.style.width = "calc((100vw - 30px) / 2)";
+  left.domElement.style.maxHeight = "var(--ui-menu-h)";
+  left.domElement.style.overflowY = "auto";
 
   // PATTERN — the animated content + how the diffuser surface looks.
   const pat = left.addFolder("Pattern");
@@ -145,16 +173,6 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   dyn.add(cfg, "cloudDynamicsSpeed", 0, 2.5, 0.01).name("speed");
   dyn.add(cfg, "cloudDynamicsContrast", 0.2, 3, 0.01).name("contrast");
   dyn.add(cfg, "cloudDynamicsWhiteMix", 0, 1, 0.01).name("cloud tint (white->colour)");
-
-  const cloud = pat.addFolder("Cloud surface");
-  cloud.add(cfg, "bumpHeight", 0, 1.5, 0.01).name("bumpiness");
-  cloud.add(cfg, "bumpScale", 0.5, 8, 0.05).name("bump scale");
-  cloud.add(cfg, "bumpDetail", 1, 6, 1).name("bump detail");
-
-  const look = pat.addFolder("Look");
-  look.add(cfg, "ambient", 0, 0.3, 0.005).name("ambient glow");
-  look.add(cfg, "backgroundTint", 0, 0.5, 0.01).name("background");
-  look.close();
 
   // BREATHING — per-partition underlying pulse that mixes with the pattern.
   const br = left.addFolder("Breathing");
@@ -248,4 +266,14 @@ export function buildGui(cfg: Config, hooks: GuiHooks): void {
   blend.add(cfg, "partitionBlend", OSC_BLENDS).name("oscillators with each other");
   blend.add(cfg, "breatheBlend", BLEND_MODES).name("breathing with pattern");
   blend.add(cfg, "breatheMix", 0, 1, 0.01).name("breath opacity");
+
+  return {
+    refreshFromConfig: () => {
+      recomputeLimits();
+      paletteState.palette = cfg.patternPalettes[cfg.pattern];
+      paletteCtrl.updateDisplay();
+      refreshControllers(gui);
+      refreshControllers(left);
+    },
+  };
 }

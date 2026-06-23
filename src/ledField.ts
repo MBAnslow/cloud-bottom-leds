@@ -2,6 +2,14 @@ import * as THREE from "three";
 import type { Config, WiringOrder } from "./config";
 
 /**
+ * Default highlight-rolloff exposure used when packing hardware bytes. The
+ * rolloff is a Reinhard curve `(x*e)/(1 + x*e)` which, unlike `1 - exp(-x*e)`,
+ * keeps responding across the whole exposure range instead of saturating once
+ * `x*e` passes ~1 (the LED gain is baked into the buffer, so x is often > 1).
+ */
+const STREAM_EXPOSURE = 1.25;
+
+/**
  * Owns the per-LED color buffer (row-major linear RGB) and mirrors it into a
  * GPU DataTexture for the shader. Also produces the byte stream for hardware.
  */
@@ -66,21 +74,55 @@ export class LedField {
   }
 
   /**
-   * Pack colors into a gamma-corrected 8-bit RGB byte stream for the strips.
-   * Honors wiring order so the visual top-left maps to LED index 0 correctly.
+   * Pack colors into an 8-bit RGB byte stream for the strips:
+   *
+   *   lit    = linear * exposure
+   *   mapped = lit / (1 + lit)          // Reinhard rolloff (no hard clipping)
+   *   out    = pow(mapped, 1 / gamma)   // encoding
+   *
+   * `gamma = 1` sends LINEAR bytes, which is correct for raw WS2812B pixels and
+   * SPI controllers (K-1000C, SP107E, WLED with gamma off): their PWM duty is
+   * ~linear with the byte, so emitted light tracks `mapped` and therefore the
+   * on-screen brightness. Display-style gamma encoding (1/2.2) here would lift
+   * the mids so the whole top half of the range looks equally bright. Raise
+   * `gamma` only if the controller applies its own gamma decode. The Reinhard
+   * rolloff keeps the `exposure` slider responsive end to end. Honors wiring
+   * order so the visual top-left maps to LED index 0 correctly.
    */
-  toBytes(wiring: WiringOrder, gamma = 2.2): Uint8Array {
+  toBytes(wiring: WiringOrder, gamma = 1, exposure = STREAM_EXPOSURE): Uint8Array {
     const out = new Uint8Array(this.count * 3);
     const inv = 1 / gamma;
+    const exp = Math.max(0, exposure);
+    const rowSerp = wiring === "serpentine";
+    const colMajor = wiring === "column-major" || wiring === "column-serpentine";
+    const colSerp = wiring === "column-serpentine";
     let dst = 0;
-    for (let r = 0; r < this.rows; r++) {
-      const reversed = wiring === "serpentine" && r % 2 === 1;
-      for (let cc = 0; cc < this.cols; cc++) {
-        const c = reversed ? this.cols - 1 - cc : cc;
-        const src = (r * this.cols + c) * 3;
-        out[dst++] = clamp255(Math.pow(this.colors[src], inv) * 255);
-        out[dst++] = clamp255(Math.pow(this.colors[src + 1], inv) * 255);
-        out[dst++] = clamp255(Math.pow(this.colors[src + 2], inv) * 255);
+    const encode = (linear: number) => {
+      const lit = Math.max(0, linear) * exp;
+      const mapped = lit / (1 + lit);
+      return clamp255(Math.pow(mapped, inv) * 255);
+    };
+    const pushPixel = (r: number, c: number) => {
+      const src = (r * this.cols + c) * 3;
+      out[dst++] = encode(this.colors[src]);
+      out[dst++] = encode(this.colors[src + 1]);
+      out[dst++] = encode(this.colors[src + 2]);
+    };
+    if (colMajor) {
+      for (let c = 0; c < this.cols; c++) {
+        const reversed = colSerp && c % 2 === 1;
+        for (let rr = 0; rr < this.rows; rr++) {
+          const r = reversed ? this.rows - 1 - rr : rr;
+          pushPixel(r, c);
+        }
+      }
+    } else {
+      for (let r = 0; r < this.rows; r++) {
+        const reversed = rowSerp && r % 2 === 1;
+        for (let cc = 0; cc < this.cols; cc++) {
+          const c = reversed ? this.cols - 1 - cc : cc;
+          pushPixel(r, c);
+        }
       }
     }
     return out;

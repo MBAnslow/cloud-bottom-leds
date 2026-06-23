@@ -3,7 +3,7 @@
 **A tool for visualising potential LED light setups for our installation** — a
 lit, cloud-like surface with LED strips behind it.
 
-It simulates LED-strip lighting patterns behind a bumpy, diffuse **cloud**
+It simulates LED-strip lighting patterns behind a static, diffuse **cloud**
 surface so we can preview what a build will actually look like — and stream the
 exact same frames live to real LED strips to verify on hardware.
 
@@ -29,8 +29,7 @@ preview predicts what the real installation will look like.
   the bottom of the cloud, throwing colour up into the volume). **Click-drag to
   orbit** (including from underneath, to see the lit underside), scroll to zoom.
 - **Cloud shape (3D)** — `thickness (mm)` sets how tall the cloud volume is
-  above the LED plane, and `density` how thick/opaque it looks; the `bumpiness`
-  and `bump scale` controls shape its puffiness. `sky` picks the cloud-view
+  above the LED plane, and `density` how thick/opaque it looks. `sky` picks the cloud-view
   background (`night`, `dawn`, `daylight`, `dusk`); `night darkness` deepens
   the night preset. The LED emission inside the
   base reuses the same physical gaussian spread as the flat view, then scatters
@@ -52,8 +51,6 @@ preview predicts what the real installation will look like.
 - **Diffuser (physical)** — LED-to-diffuser distance (mm), the material's own
   haze (mm), and opacity (% of light blocked). Distance and pitch together
   decide whether you see hotspots or an even glow.
-- **Cloud surface** — a static, bumpy physical surface (bumpiness, scale,
-  detail). Thicker bumps block more light. Only the LEDs animate.
 - **Patterns** — plasma, rainbow waves, twinkle, fire, aurora drift, breathe,
   rain, solid. Plus speed, content level, **palette** (saved per pattern), and
   palette-shift. Palettes include `rainbow`, `sunset`, `ocean`, `forest`,
@@ -105,14 +102,17 @@ preview predicts what the real installation will look like.
 The controls are split into two side menus: on the **right**, the **view**
 selector and **Hardware** (cloud size, LED grid, diffuser, streaming); on the
 **left**, **Pattern** (the
-animated content and the cloud surface look), **Breathing** (layout/mask,
+animated content), **Breathing** (layout/mask,
 overlap, rate/depth/stagger), and **Blending** (pattern+breathing mix,
 oscillator blending, breath opacity). The LED cloud sits centred between them, and the
 breathing oscilloscope runs along the bottom centre — the **partition count**
 and the **per-partition colours** live right there in the oscilloscope panel.
 - **Live hardware streaming** — pushes frames to a [WLED](https://kno.wled.ge/)
-  controller over its real-time UDP protocol (DNRGB), with serpentine or
-  row-major wiring and a configurable frame rate.
+  controller over its real-time UDP protocol (DNRGB), with row/column major and
+  serpentine wiring options plus a configurable frame rate.
+- **Default config save/load** — top-right `Save` stores the current settings as
+  your personal baseline in browser local storage, and `Load` restores it (or
+  restores built-in defaults if none has been saved yet).
 
 ## The physical model (so you can trust the preview)
 
@@ -175,10 +175,8 @@ npm run server       # ws://localhost:8081  ->  UDP to WLED
 ```
 
 Use the on-screen panel to dial in the look: increase **LED distance** (or the
-material **haze**) to blend distinct LED dots into a soft, even glow, and raise
-**bumpiness** in *Cloud Surface* for a more volumetric, lumpy cloud. Individual
-LED spots always render round — the bumps are a relief layer on top and never
-reshape the light.
+material **haze**) to blend distinct LED dots into a soft, even glow. Individual
+LED spots always render round and are not reshaped by the cloud shading.
 
 ## Driving real LED strips
 
@@ -192,8 +190,11 @@ DIY ecosystem.
 4. Run the bridge: `npm run server`.
 5. In the simulator's **Stream (WLED)** panel (under Hardware):
    - set **WLED IP** to your controller's address,
-   - set **wiring** to `serpentine` if alternate rows are reversed (typical for
-     a boustrophedon strip layout), otherwise `row-major`,
+   - set **wiring** based on your physical routing:
+     - `row-major`: left->right, then next row
+     - `serpentine`: alternating row direction (zig-zag rows)
+     - `column-major`: top->bottom, then next column
+     - `column-serpentine`: alternating column direction (zig-zag columns)
    - tick **enable stream**.
 
 The bridge sends DNRGB packets on UDP port `21324`, chunked at 489 LEDs/packet,
@@ -204,8 +205,9 @@ stop). Brightness and gamma are applied before sending.
 
 - The simulator treats the grid as `rows × cols` with the **top-left** LED as
   index `0`, filling left-to-right, top-to-bottom (row-major).
-- If your matrix snakes back on every other row, choose **serpentine** wiring so
-  the visual lines up with the physical layout.
+- If your physical matrix runs by columns, choose `column-major` or
+  `column-serpentine` so the streamed output is not transposed.
+- If your matrix snakes on each run, use the matching `serpentine` mode.
 - For multiple independent controllers, run one bridge per controller (set
   `PORT=8082 npm run server`, point a second simulator tab's `bridge ws` at it).
 

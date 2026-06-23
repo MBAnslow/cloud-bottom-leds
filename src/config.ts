@@ -1,4 +1,4 @@
-export type WiringOrder = "row-major" | "serpentine";
+export type WiringOrder = "row-major" | "serpentine" | "column-major" | "column-serpentine";
 
 /**
  * Which preview to render: the flat build panel (true to the physical rect, for
@@ -52,14 +52,6 @@ export interface Config {
   cloudSky: CloudSkyPreset;
   /** Extra darkening applied when `cloudSky` is `night` (0..1). */
   cloudNightDarkness: number;
-
-  // --- Cloud surface shape ---
-  /** Height/strength of the cloud bumps (also modulates local thickness/transmission). */
-  bumpHeight: number;
-  /** Spatial frequency of the bumps (bigger = smaller, denser bumps). */
-  bumpScale: number;
-  /** Octaves of fbm noise used for the cloud shape. */
-  bumpDetail: number;
 
   // --- Pattern ---
   /** Master on/off for the animated pattern layer (off = breathing only). */
@@ -140,6 +132,10 @@ export interface Config {
   wledPort: number;
   /** Physical strip wiring order so the visual maps correctly to hardware. */
   wiring: WiringOrder;
+  /** Highlight-rolloff exposure for the stream (matches the on-screen tone map). Lower = dimmer/more rolloff. */
+  streamExposure: number;
+  /** Encoding gamma for the streamed bytes. 1 = linear (raw WS2812B / SPI controllers); raise if the controller applies its own gamma decode. */
+  streamGamma: number;
   /** Max frames/sec sent to hardware (visual still runs at full rate). */
   streamFps: number;
 }
@@ -274,7 +270,7 @@ export const defaultConfig: Config = {
   cloudHeightMm: 600,
 
   rows: 8,
-  cols: 16,
+  cols: 32,
   ledType: "ws2812b-60",
 
   ledBrightness: 2.0,
@@ -288,10 +284,6 @@ export const defaultConfig: Config = {
   cloudDensity: 0.85,
   cloudSky: "night",
   cloudNightDarkness: 0.45,
-
-  bumpHeight: 0.55,
-  bumpScale: 2.4,
-  bumpDetail: 4,
 
   patternEnabled: true,
   pattern: "auroraDrift",
@@ -339,8 +331,10 @@ export const defaultConfig: Config = {
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",
-  wledHost: "192.168.1.50",
+  wledHost: "10.0.3.60",
   wledPort: 21324,
   wiring: "serpentine",
+  streamExposure: 1.25,
+  streamGamma: 1.0,
   streamFps: 40,
 };
