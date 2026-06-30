@@ -108,7 +108,7 @@ oscillator blending, breath opacity). The LED cloud sits centred between them, a
 breathing oscilloscope runs along the bottom centre — the **partition count**
 and the **per-partition colours** live right there in the oscilloscope panel.
 - **Live hardware streaming** — pushes frames to a [WLED](https://kno.wled.ge/)
-  controller over its real-time UDP protocol (DNRGB), with row/column major and
+  controller over DDP, with row/column major and
   serpentine wiring options plus a configurable frame rate.
 - **Default config save/load** — top-right `Save` stores the current settings as
   your personal baseline in browser local storage, and `Load` restores it (or
@@ -159,7 +159,7 @@ LED count for how many LEDs / metres of strip to buy.
 ## Stack
 
 - Frontend: Vite + TypeScript + Three.js (single full-screen GLSL shader) + lil-gui.
-- Bridge: Node.js (Express + ws) → UDP relay to WLED. Browsers can't send UDP,
+- Bridge: Node.js (Express + ws) → DDP-over-UDP relay to WLED. Browsers can't send UDP,
   so this small process does it.
 
 ## Quick start
@@ -171,7 +171,7 @@ npm install
 npm run dev          # opens http://localhost:5173
 
 # 2) Hardware bridge (only needed to drive real strips)
-npm run server       # ws://localhost:8081  ->  UDP to WLED
+npm run server       # ws://localhost:8081  ->  DDP to WLED
 ```
 
 Use the on-screen panel to dial in the look: increase **LED distance** (or the
@@ -197,9 +197,8 @@ DIY ecosystem.
      - `column-serpentine`: alternating column direction (zig-zag columns)
    - tick **enable stream**.
 
-The bridge sends DNRGB packets on UDP port `21324`, chunked at 489 LEDs/packet,
-with a 2-second realtime timeout (WLED reverts to its normal effect if frames
-stop). Brightness and gamma are applied before sending.
+The bridge sends DDP packets on UDP port `4048` (by default), chunked to fit
+common MTU sizes. Brightness and gamma are applied before sending.
 
 ### Mapping the grid to your strips
 
@@ -240,5 +239,5 @@ src/
   gui.ts              # lil-gui controls (Hardware / Pattern / Breathing / Blending)
   main.ts             # render loop wiring it all together
 server/
-  index.mjs           # WebSocket -> UDP (WLED DNRGB) bridge
+  index.mjs           # WebSocket -> DDP bridge (UDP to WLED)
 ```

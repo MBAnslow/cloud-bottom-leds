@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { Config, WiringOrder } from "./config";
+import type { Config, WiringOrder, StreamChannelOrder } from "./config";
 
 /**
  * Default highlight-rolloff exposure used when packing hardware bytes. The
@@ -8,6 +8,13 @@ import type { Config, WiringOrder } from "./config";
  * `x*e` passes ~1 (the LED gain is baked into the buffer, so x is often > 1).
  */
 const STREAM_EXPOSURE = 1.25;
+
+interface StreamCalibration {
+  saturation?: number;
+  redGain?: number;
+  greenGain?: number;
+  blueGain?: number;
+}
 
 /**
  * Owns the per-LED color buffer (row-major linear RGB) and mirrors it into a
@@ -21,6 +28,7 @@ export class LedField {
   /** RGBA float, cols x rows, uploaded to the shader */
   texture: THREE.DataTexture;
   private texData: Float32Array<ArrayBuffer>;
+  private packFrame = 0;
 
   constructor(cfg: Config) {
     this.rows = cfg.rows;
@@ -89,24 +97,85 @@ export class LedField {
    * rolloff keeps the `exposure` slider responsive end to end. Honors wiring
    * order so the visual top-left maps to LED index 0 correctly.
    */
-  toBytes(wiring: WiringOrder, gamma = 1, exposure = STREAM_EXPOSURE): Uint8Array {
+  toBytes(
+    wiring: WiringOrder,
+    channelOrder: StreamChannelOrder = "RGB",
+    gamma = 1,
+    exposure = STREAM_EXPOSURE,
+    calibration: StreamCalibration = {}
+  ): Uint8Array {
     const out = new Uint8Array(this.count * 3);
     const inv = 1 / gamma;
     const exp = Math.max(0, exposure);
+    const phase = this.packFrame++ & 1;
+    const sat = calibration.saturation ?? 1;
+    const gR = calibration.redGain ?? 1;
+    const gG = calibration.greenGain ?? 1;
+    const gB = calibration.blueGain ?? 1;
     const rowSerp = wiring === "serpentine";
     const colMajor = wiring === "column-major" || wiring === "column-serpentine";
     const colSerp = wiring === "column-serpentine";
     let dst = 0;
-    const encode = (linear: number) => {
+    const encode = (linear: number, dither: number) => {
       const lit = Math.max(0, linear) * exp;
       const mapped = lit / (1 + lit);
-      return clamp255(Math.pow(mapped, inv) * 255);
+      // Temporal +/-0.5 LSB dithering reduces visible stepping at slow fades
+      // (especially around dark values) without changing average brightness.
+      return clamp255(Math.pow(mapped, inv) * 255 + dither);
     };
     const pushPixel = (r: number, c: number) => {
       const src = (r * this.cols + c) * 3;
-      out[dst++] = encode(this.colors[src]);
-      out[dst++] = encode(this.colors[src + 1]);
-      out[dst++] = encode(this.colors[src + 2]);
+      const pix = r * this.cols + c;
+      let pr = Math.max(0, this.colors[src]);
+      let pg = Math.max(0, this.colors[src + 1]);
+      let pb = Math.max(0, this.colors[src + 2]);
+      // Saturation in linear space so it behaves predictably for LED emitters.
+      const luma = pr * 0.2126 + pg * 0.7152 + pb * 0.0722;
+      pr = luma + (pr - luma) * sat;
+      pg = luma + (pg - luma) * sat;
+      pb = luma + (pb - luma) * sat;
+      // Per-channel calibration trims (white balance / spectral compensation).
+      pr *= gR;
+      pg *= gG;
+      pb *= gB;
+      const dR = ((pix + phase + 0) & 1) === 0 ? -0.5 : 0.5;
+      const dG = ((pix + phase + 1) & 1) === 0 ? -0.5 : 0.5;
+      const dB = ((pix + phase + 2) & 1) === 0 ? -0.5 : 0.5;
+      const er = encode(pr, dR);
+      const eg = encode(pg, dG);
+      const eb = encode(pb, dB);
+      switch (channelOrder) {
+        case "RBG":
+          out[dst++] = er;
+          out[dst++] = eb;
+          out[dst++] = eg;
+          break;
+        case "GRB":
+          out[dst++] = eg;
+          out[dst++] = er;
+          out[dst++] = eb;
+          break;
+        case "GBR":
+          out[dst++] = eg;
+          out[dst++] = eb;
+          out[dst++] = er;
+          break;
+        case "BRG":
+          out[dst++] = eb;
+          out[dst++] = er;
+          out[dst++] = eg;
+          break;
+        case "BGR":
+          out[dst++] = eb;
+          out[dst++] = eg;
+          out[dst++] = er;
+          break;
+        default:
+          out[dst++] = er;
+          out[dst++] = eg;
+          out[dst++] = eb;
+          break;
+      }
     };
     if (colMajor) {
       for (let c = 0; c < this.cols; c++) {

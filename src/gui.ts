@@ -111,26 +111,28 @@ export function buildGui(cfg: Config, hooks: GuiHooks): GuiHandle {
   colsCtrl.onFinishChange(limitThenLayout);
   recomputeLimits();
 
-  const emitter = hw.addFolder("LEDs");
-  emitter.add(cfg, "ledBrightness", 0, 5, 0.01).name("brightness (gain)");
-  emitter.add(cfg, "patternFps", 1, 120, 1).name("pattern fps");
-
   const diffuser = hw.addFolder("Diffuser");
   diffuser.add(cfg, "ledDistanceMm", 0, 120, 0.5).name("LED distance (mm)");
   diffuser.add(cfg, "diffuserScatterMm", 0, 40, 0.1).name("material haze (mm)");
-  diffuser.add(cfg, "opacity", 0, 95, 1).name("opacity (%)");
 
   const stream = hw.addFolder("Stream (WLED)");
   stream.add(cfg, "streamEnabled").name("enable stream").onChange(hooks.onStreamToggle);
   stream.add(cfg, "wledHost").name("WLED IP").onFinishChange(hooks.onStreamReconfigure);
-  stream.add(cfg, "wledPort", 1, 65535, 1).name("UDP port").onFinishChange(hooks.onStreamReconfigure);
+  stream.add(cfg, "wledPort", 1, 65535, 1).name("DDP port").onFinishChange(hooks.onStreamReconfigure);
   stream.add(cfg, "bridgeUrl").name("bridge ws");
   stream
     .add(cfg, "wiring", ["row-major", "serpentine", "column-major", "column-serpentine"])
     .name("wiring");
+  stream
+    .add(cfg, "streamChannelOrder", ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"])
+    .name("channel order");
   stream.add(cfg, "streamExposure", 0.1, 4, 0.01).name("exposure");
   stream.add(cfg, "streamGamma", 0.4, 3, 0.05).name("gamma (1 = linear)");
-  stream.add(cfg, "streamFps", 1, 60, 1).name("stream fps");
+  stream.add(cfg, "streamSaturation", 0, 2.5, 0.01).name("saturation");
+  stream.add(cfg, "streamRedGain", 0.2, 2, 0.01).name("red gain");
+  stream.add(cfg, "streamGreenGain", 0.2, 2, 0.01).name("green gain");
+  stream.add(cfg, "streamBlueGain", 0.2, 2, 0.01).name("blue gain");
+  stream.add(cfg, "fps", 1, 60, 1).name("fps (sim + stream)");
   stream.close();
 
   // =====================================================================
@@ -168,11 +170,29 @@ export function buildGui(cfg: Config, hooks: GuiHooks): GuiHandle {
   const dyn = pat.addFolder("Cloud dynamics");
   dyn.add(cfg, "cloudDynamicsEnabled").name("enable");
   dyn.add(cfg, "cloudDynamicsType", CLOUD_DYNAMICS_NOISES).name("noise");
-  dyn.add(cfg, "cloudDynamicsAmount", 0, 1, 0.01).name("amount");
+  dyn.add(cfg, "cloudDynamicsAmount", 0, 2, 0.01).name("depth (dark<->bright)");
   dyn.add(cfg, "cloudDynamicsScale", 0.2, 10, 0.05).name("scale");
   dyn.add(cfg, "cloudDynamicsSpeed", 0, 2.5, 0.01).name("speed");
   dyn.add(cfg, "cloudDynamicsContrast", 0.2, 3, 0.01).name("contrast");
   dyn.add(cfg, "cloudDynamicsWhiteMix", 0, 1, 0.01).name("cloud tint (white->colour)");
+
+  // TIMELINE TINT — 24h day-cycle colour wash multiplied over the final signal.
+  // The interactive widget (with the gradient strip + draggable swatches +
+  // playhead + scrubbing) lives below the LED view; this folder just exposes
+  // enable / cycle speed for parity with the other layers.
+  const tint = left.addFolder("Timeline tint");
+  tint.add(cfg, "tintEnabled").name("enable");
+  tint.add(cfg, "tintPlaying").name("play");
+  // Default 60s = 24h preview. Up to 24h (=86400s) for real-time sun cycle.
+  tint
+    .add(cfg, "tintCycleSeconds", 5, 86400, 1)
+    .name("cycle (sec = 24h)");
+  const tintActions = {
+    reset: () => {
+      cfg.tintTime = 0.5;
+    },
+  };
+  tint.add(tintActions, "reset").name("reset playhead to noon");
 
   // BREATHING — per-partition underlying pulse that mixes with the pattern.
   const br = left.addFolder("Breathing");
@@ -256,6 +276,8 @@ export function buildGui(cfg: Config, hooks: GuiHooks): GuiHandle {
 
   br.add(cfg, "breatheRate", 1, 30, 0.5).name("rate (per min)");
   br.add(cfg, "breatheDepth", 0, 1, 0.01).name("depth");
+  br.add(cfg, "breatheMinBrightness", 0, 1, 0.01).name("min brightness");
+  br.add(cfg, "breatheMinColor", 0, 1, 0.01).name("min colour");
   br.add(cfg, "breatheStagger", 0, 1, 0.01).name("stagger");
   // Partition count and per-partition colours live in the bottom oscilloscope
   // panel (wired in main.ts), so they are intentionally not added here.
@@ -265,7 +287,6 @@ export function buildGui(cfg: Config, hooks: GuiHooks): GuiHandle {
   const blend = left.addFolder("Blending");
   blend.add(cfg, "partitionBlend", OSC_BLENDS).name("oscillators with each other");
   blend.add(cfg, "breatheBlend", BLEND_MODES).name("breathing with pattern");
-  blend.add(cfg, "breatheMix", 0, 1, 0.01).name("breath opacity");
 
   return {
     refreshFromConfig: () => {

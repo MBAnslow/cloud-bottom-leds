@@ -21,7 +21,7 @@ import { getMask, sampleMask, maskVersion } from "./mask";
  */
 
 export const MAX_PARTITIONS = 6;
-export const MIN_PARTITIONS = 2;
+export const MIN_PARTITIONS = 1;
 
 /** Clamp the configured partition count to the supported range. */
 export function partitionCount(cfg: Config): number {
@@ -462,17 +462,24 @@ export function blendFn(mode: Config["breatheBlend"]): BlendFn {
 export function applyBreathing(out: Float32Array, t: number, cfg: Config) {
   if (!cfg.breatheEnabled) return;
   const { rows, cols } = cfg;
+  const usePatternBase = cfg.patternEnabled;
   const parts = partitionCount(cfg);
-  const mix = cfg.breatheMix;
+  // Breathing opacity is fixed to 1 by design.
+  const mix = 1;
   const W = partitionWeights(cfg, t);
-  const mode = cfg.breatheBlend;
-  const blend = blendFn(cfg.breatheBlend);
+  // If pattern is disabled, there is no meaningful backdrop layer to apply
+  // blend modes against; force a normal breathing mix so min colour/brightness
+  // behave as intuitive trough/peak endpoints over a white base.
+  const mode = usePatternBase ? cfg.breatheBlend : "normal";
+  const blend = blendFn(mode);
 
   const env = new Array<number>(parts);
+  const wave = new Array<number>(parts);
   const bR = new Array<number>(parts);
   const bG = new Array<number>(parts);
   const bB = new Array<number>(parts);
   for (let p = 0; p < parts; p++) {
+    wave[p] = breatheWave(p, parts, t, cfg);
     env[p] = breatheEnvelope(p, parts, t, cfg);
     const b = cachedLinear(cfg.breatheColors[p] ?? "#ffffff", p);
     bR[p] = b[0];
@@ -484,6 +491,156 @@ export function applyBreathing(out: Float32Array, t: number, cfg: Config) {
   const n = rows * cols;
   for (let i = 0; i < n; i++) {
     const wb = i * parts;
+    if (mode === "normal") {
+      // Requested behaviour:
+      // - as a partition breathes IN, shift from base -> partition chroma
+      // - at full IN, return to normal brightness
+      // - as it breathes OUT, reduce local brightness
+      let cover = 0;
+      let waveDrive = 0;
+      let addR = 0;
+      let addG = 0;
+      let addB = 0;
+      let maxR = 0;
+      let maxG = 0;
+      let maxB = 0;
+      let scrR = 1;
+      let scrG = 1;
+      let scrB = 1;
+      let mulR = 1;
+      let mulG = 1;
+      let mulB = 1;
+      let minR = 1;
+      let minG = 1;
+      let minB = 1;
+      let difR = 0;
+      let difG = 0;
+      let difB = 0;
+      let first = true;
+      let nMulR = 0;
+      let nMulG = 0;
+      let nMulB = 0;
+      let nMinR = 0;
+      let nMinG = 0;
+      let nMinB = 0;
+      const EPS = 1e-3;
+      for (let p = 0; p < parts; p++) {
+        const wp = W[wb + p];
+        if (wp === 0) continue;
+        cover += wp;
+        const wv = wave[p];
+        waveDrive += wp * wv;
+        // Build the region chroma independent from the instantaneous wave, then
+        // drive how much of it is applied with an explicit 0..1 amount below.
+        const xr = wp * bR[p];
+        const xg = wp * bG[p];
+        const xb = wp * bB[p];
+        addR += xr;
+        addG += xg;
+        addB += xb;
+        if (xr > maxR) maxR = xr;
+        if (xg > maxG) maxG = xg;
+        if (xb > maxB) maxB = xb;
+        const cr = clamp01(xr);
+        const cg = clamp01(xg);
+        const cb = clamp01(xb);
+        scrR *= 1 - cr;
+        scrG *= 1 - cg;
+        scrB *= 1 - cb;
+        if (cr > EPS) {
+          mulR *= cr;
+          nMulR++;
+          if (cr < minR) minR = cr;
+          nMinR++;
+        }
+        if (cg > EPS) {
+          mulG *= cg;
+          nMulG++;
+          if (cg < minG) minG = cg;
+          nMinG++;
+        }
+        if (cb > EPS) {
+          mulB *= cb;
+          nMulB++;
+          if (cb < minB) minB = cb;
+          nMinB++;
+        }
+        if (first) {
+          difR = cr;
+          difG = cg;
+          difB = cb;
+          first = false;
+        } else {
+          difR = Math.abs(difR - cr);
+          difG = Math.abs(difG - cg);
+          difB = Math.abs(difB - cb);
+        }
+      }
+      if (cover <= 1e-6) continue;
+
+      let srcR: number;
+      let srcG: number;
+      let srcB: number;
+      if (osc === "additive") {
+        srcR = addR;
+        srcG = addG;
+        srcB = addB;
+      } else if (osc === "lighten") {
+        srcR = maxR;
+        srcG = maxG;
+        srcB = maxB;
+      } else if (osc === "screen") {
+        srcR = 1 - scrR;
+        srcG = 1 - scrG;
+        srcB = 1 - scrB;
+      } else if (osc === "multiply") {
+        srcR = nMulR > 0 ? Math.pow(mulR, 1 / nMulR) : 0;
+        srcG = nMulG > 0 ? Math.pow(mulG, 1 / nMulG) : 0;
+        srcB = nMulB > 0 ? Math.pow(mulB, 1 / nMulB) : 0;
+      } else if (osc === "darken") {
+        srcR = nMinR > 0 ? minR : 0;
+        srcG = nMinG > 0 ? minG : 0;
+        srcB = nMinB > 0 ? minB : 0;
+      } else if (osc === "difference") {
+        srcR = difR;
+        srcG = difG;
+        srcB = difB;
+      } else {
+        const inv = cover > 1e-6 ? 1 / cover : 0;
+        srcR = addR * inv;
+        srcG = addG * inv;
+        srcB = addB * inv;
+      }
+
+      const waveNorm = clamp01(waveDrive / cover); // 0..1 trough->peak in this region
+      const minBright = clamp01(cfg.breatheMinBrightness);
+      const minColor = clamp01(cfg.breatheMinColor);
+      // `breatheDepth` scales how aggressive the oscillation is, by pulling the
+      // effective trough back toward the peak (1.0). depth=1 means the trough
+      // sits at the user's mins; depth=0 means no oscillation at all.
+      const effMinColor = 1 - cfg.breatheDepth * (1 - minColor);
+      const effMinBright = 1 - cfg.breatheDepth * (1 - minBright);
+      // True mix ratio of breath chroma over pattern.
+      const colorAmt = effMinColor + (1 - effMinColor) * waveNorm;
+      // True brightness multiplier on the mix.
+      const brightAmt = effMinBright + (1 - effMinBright) * waveNorm;
+      const o = i * 3;
+      const pr = usePatternBase ? out[o] : 1;
+      const pg = usePatternBase ? out[o + 1] : 1;
+      const pb = usePatternBase ? out[o + 2] : 1;
+      // Mix pattern and breath colour, then dim by brightness.
+      const resR = (pr * (1 - colorAmt) + srcR * colorAmt) * brightAmt;
+      const resG = (pg * (1 - colorAmt) + srcG * colorAmt) * brightAmt;
+      const resB = (pb * (1 - colorAmt) + srcB * colorAmt) * brightAmt;
+      // Envelope: how strongly this breathing region replaces the pattern.
+      // Separate from the min sliders by design.
+      const envelope = clamp01(mix * Math.min(1, cover));
+      out[o] = pr + (resR - pr) * envelope;
+      out[o + 1] = pg + (resG - pg) * envelope;
+      out[o + 2] = pb + (resB - pb) * envelope;
+      continue;
+    }
+
     // Accumulate every partition's contribution (its base colour pulsed by its
     // own envelope, weighted by membership) under all oscillator-blend
     // strategies at once, then pick the configured one.
@@ -513,11 +670,13 @@ export function applyBreathing(out: Float32Array, t: number, cfg: Config) {
     let nMinR = 0;
     let nMinG = 0;
     let nMinB = 0;
+    let waveSum = 0;
     const EPS = 1e-3;
     for (let p = 0; p < parts; p++) {
       const wp = W[wb + p];
       if (wp === 0) continue;
       total += wp;
+      waveSum += wp * wave[p];
       const ep = env[p];
       const xr = wp * bR[p] * ep;
       const xg = wp * bG[p] * ep;
@@ -602,30 +761,44 @@ export function applyBreathing(out: Float32Array, t: number, cfg: Config) {
       srcB = addB * inv;
     }
 
-    // Opacity of the whole breathing layer over the pattern (its strength ×
-    // mask coverage, clamped to 1).
+    // Region descriptors used by colour mix and brightness floor.
     const cover = total < 1 ? total : 1;
-    const alpha = mix * cover;
+    const waveNorm = clamp01(waveSum / total); // 0..1 trough->peak in this region
+    const minColor = clamp01(cfg.breatheMinColor);
+    const minBright = clamp01(cfg.breatheMinBrightness);
+    // breatheDepth scales how aggressive the oscillation is (see normal path).
+    const effMinColor = 1 - cfg.breatheDepth * (1 - minColor);
+    const effMinBright = 1 - cfg.breatheDepth * (1 - minBright);
+    const colorAmt = effMinColor + (1 - effMinColor) * waveNorm;
+    const brightAmt = effMinBright + (1 - effMinBright) * waveNorm;
 
     const o = i * 3;
-    const pr = out[o];
-    const pg = out[o + 1];
-    const pb = out[o + 2];
+    const pr = usePatternBase ? out[o] : 1;
+    const pg = usePatternBase ? out[o + 1] : 1;
+    const pb = usePatternBase ? out[o + 2] : 1;
+    // Target colour: pattern combined with breath chroma via the chosen blend.
+    let tR: number;
+    let tG: number;
+    let tB: number;
     if (mode === "multiply") {
-      // For sparse patterns (e.g. rain), treat near-black pattern pixels as
-      // transparent so empty regions don't erase breathing.
       const presence = clamp01((Math.max(pr, pg, pb) - 0.02) / 0.35);
-      const br = srcR + (pr * srcR - srcR) * presence;
-      const bg = srcG + (pg * srcG - srcG) * presence;
-      const bb = srcB + (pb * srcB - srcB) * presence;
-      out[o] = pr + (br - pr) * alpha;
-      out[o + 1] = pg + (bg - pg) * alpha;
-      out[o + 2] = pb + (bb - pb) * alpha;
+      tR = srcR + (pr * srcR - srcR) * presence;
+      tG = srcG + (pg * srcG - srcG) * presence;
+      tB = srcB + (pb * srcB - srcB) * presence;
     } else {
-      out[o] = pr + (blend(pr, srcR) - pr) * alpha;
-      out[o + 1] = pg + (blend(pg, srcG) - pg) * alpha;
-      out[o + 2] = pb + (blend(pb, srcB) - pb) * alpha;
+      tR = blend(pr, srcR);
+      tG = blend(pg, srcG);
+      tB = blend(pb, srcB);
     }
+    // True mix of pattern and target via colorAmt, then dim with brightAmt.
+    const resR = (pr * (1 - colorAmt) + tR * colorAmt) * brightAmt;
+    const resG = (pg * (1 - colorAmt) + tG * colorAmt) * brightAmt;
+    const resB = (pb * (1 - colorAmt) + tB * colorAmt) * brightAmt;
+    // Envelope = breathing layer's regional opacity (independent of mins).
+    const envelope = clamp01(mix * cover);
+    out[o] = pr + (resR - pr) * envelope;
+    out[o + 1] = pg + (resG - pg) * envelope;
+    out[o + 2] = pb + (resB - pb) * envelope;
   }
 }
 

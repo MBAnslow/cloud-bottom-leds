@@ -15,11 +15,19 @@
         --ui-mid: 50vh;
         --ui-top-start: calc(var(--ui-pad) + var(--ui-hud-h) + var(--ui-gap));
         --ui-top-end: calc(var(--ui-mid) - var(--ui-gap) * 0.5);
-        --ui-breathe-h: clamp(110px, 12vh, 150px);
-        --ui-hist-h: 52px;
-        --ui-app-top: calc(var(--ui-top-start) + var(--ui-breathe-h) + var(--ui-gap));
-        --ui-app-h: calc(var(--ui-top-end) - var(--ui-app-top) - var(--ui-hist-h) - var(--ui-gap));
-        --ui-menu-top: calc(var(--ui-mid) + var(--ui-gap) * 0.5);
+        /* Two compact side panels (histogram left, breathing right) that sit
+           at the lower edge of the top LED stage. */
+        --ui-side-w: clamp(180px, 16vw, 260px);
+        --ui-breathe-w: clamp(260px, 22vw, 360px);
+        --ui-side-h: clamp(90px, 11vh, 130px);
+        --ui-tint-h: 96px;
+        /* The top half: large LED stage, then timeline just beneath. */
+        --ui-app-top: var(--ui-top-start);
+        --ui-app-h: calc(var(--ui-top-end) - var(--ui-app-top) - var(--ui-tint-h) - var(--ui-gap));
+        --ui-tint-top: calc(var(--ui-top-end) - var(--ui-tint-h));
+        /* Menus always start directly below the timeline so they never overlap
+           the top-stage widgets (histogram / breathing oscillations / LED). */
+        --ui-menu-top: calc(var(--ui-tint-top) + var(--ui-tint-h) + var(--ui-gap));
         --ui-menu-h: calc(100vh - var(--ui-menu-top) - var(--ui-pad));
       }
       * {
@@ -66,15 +74,15 @@
       #hud b {
         color: #fff;
       }
-      /* RGB histogram of the streamed bytes, docked just under the LED view. */
+      /* Small histogram panel at lower-left of the top LED stage. */
       #stream-hist {
         position: fixed;
+        bottom: calc(100vh - var(--ui-tint-top) + var(--ui-gap));
         left: var(--ui-pad);
-        right: var(--ui-pad);
-        bottom: calc(100vh - var(--ui-top-end));
-        height: var(--ui-hist-h);
+        width: var(--ui-side-w);
+        height: var(--ui-side-h);
         z-index: 9;
-        border-radius: 8px;
+        border-radius: 10px;
         background: rgba(10, 12, 20, 0.55);
         backdrop-filter: blur(8px);
         pointer-events: none;
@@ -122,37 +130,53 @@
       }
       #breathe-panel {
         position: fixed;
-        left: 50%;
-        top: var(--ui-top-start);
-        bottom: auto;
-        transform: translateX(-50%);
-        z-index: 10;
-        width: min(46vw, 560px);
-        height: var(--ui-breathe-h);
-        min-height: 110px;
-        padding: 8px 12px 10px;
+        bottom: calc(100vh - var(--ui-tint-top) + var(--ui-gap));
+        right: var(--ui-pad);
+        left: auto;
+        transform: none;
+        z-index: 12;
+        width: var(--ui-breathe-w);
+        height: var(--ui-side-h);
+        padding: 8px 8px 8px 10px;
         border-radius: 12px;
         background: rgba(10, 12, 20, 0.55);
         backdrop-filter: blur(8px);
         color: #cfd6e6;
         pointer-events: none;
         user-select: none;
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 70px;
+        grid-template-rows: minmax(0, 1fr) auto;
+        column-gap: 8px;
+        row-gap: 5px;
+        align-items: stretch;
+        overflow: hidden;
       }
       #breathe-panel.hidden {
         display: none;
       }
       #breathe-head {
+        grid-column: 2;
+        grid-row: 1;
         display: flex;
-        align-items: center;
-        gap: 16px;
-        margin-bottom: 6px;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-start;
+        gap: 6px;
+        margin-bottom: 0;
         pointer-events: auto;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        min-width: 0;
+        width: 70px;
+        min-height: 0;
+      }
+      /* In the compact right-side control column, hide the verbose labels so
+         the oscilloscope keeps most of the panel width. */
+      #breathe-head .breathe-ctl > span:first-child {
+        display: none;
       }
       #breathe-title {
-        font-size: 11px;
+        font-size: 10px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #8b93a7;
@@ -187,26 +211,130 @@
         color: #fff;
         font-size: 12px;
       }
+      #breathe-swatches-row {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 1px;
+        pointer-events: auto;
+      }
       #breathe-swatches {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
+        flex-wrap: nowrap;
+        pointer-events: auto;
       }
       #breathe-swatches input[type="color"] {
-        width: 26px;
-        height: 20px;
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        min-width: 24px;
+        height: 16px;
         padding: 0;
         border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 6px;
-        background: none;
+        border-radius: 4px;
+        background: transparent;
         cursor: pointer;
+        overflow: hidden;
+      }
+      #breathe-swatches input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      #breathe-swatches input[type="color"]::-webkit-color-swatch {
+        border: none;
+      }
+      #breathe-swatches input[type="color"]::-moz-color-swatch {
+        border: none;
       }
       #breathe-viz {
-        flex: 1;
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
         width: 100%;
         height: 100%;
         pointer-events: auto;
         cursor: crosshair;
+      }
+      /* --- Timeline tint widget (docked between LED view and histogram) --- */
+      #tint-timeline {
+        position: fixed;
+        top: var(--ui-tint-top);
+        left: var(--ui-pad);
+        right: var(--ui-pad);
+        height: var(--ui-tint-h);
+        z-index: 9;
+        padding: 6px 10px 4px;
+        border-radius: 8px;
+        background: rgba(10, 12, 20, 0.55);
+        backdrop-filter: blur(8px);
+        color: #cfd6e6;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        user-select: none;
+      }
+      #tint-timeline .tt-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8b93a7;
+      }
+      #tint-timeline .tt-title {
+        color: #8b93a7;
+      }
+      #tint-timeline .tt-play {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.06);
+        color: #cfd6e6;
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 1;
+        padding: 0;
+      }
+      #tint-timeline .tt-play:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      #tint-timeline .tt-time {
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+        min-width: 44px;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        text-transform: none;
+      }
+      #tint-timeline .tt-hint {
+        margin-left: auto;
+        color: #6c7388;
+        font-size: 10px;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      #tint-timeline .tt-strip {
+        display: block;
+        flex: 1 1 auto;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        cursor: crosshair;
+      }
+      #tint-timeline .tt-picker {
+        position: absolute;
+        left: -9999px;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
       }
       .lil-gui {
         z-index: 11;
@@ -233,12 +361,11 @@
           <span id="breathe-parts-val">3</span>
           <button id="breathe-parts-inc" type="button">+</button>
         </span>
-        <span class="breathe-ctl">
-          <span>colours</span>
-          <span id="breathe-swatches"></span>
-        </span>
       </div>
       <canvas id="breathe-viz"></canvas>
+      <div id="breathe-swatches-row">
+        <span id="breathe-swatches"></span>
+      </div>
     </div>
     <div id="hud">
       <div><b>Cloud Bottom LEDs</b></div>
@@ -246,6 +373,7 @@
       <div id="hud-fps">—</div>
       <div><span id="hud-stream-dot" class="dot"></span><span id="hud-stream">stream: off</span></div>
     </div>
+    <div id="tint-timeline-mount"></div>
     <canvas id="stream-hist" width="512" height="52"></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>

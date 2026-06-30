@@ -26,6 +26,7 @@ export const fragmentShader = /* glsl */ `
 
   uniform float uAmbient;
   uniform float uBackground;
+  uniform vec3  uTint;        // timeline tint (white = neutral)
 
   uniform int   uViewMode;   // 0 = flat build panel, 1 = lit cloud silhouette
 
@@ -182,6 +183,10 @@ export const fragmentShader = /* glsl */ `
       col = transmitted + cloudBody;
       col += vec3(0.05, 0.07, 0.13) * uBackground;
     }
+
+    // Timeline tint is a coloured-light multiplier over the lit cloud surface:
+    // white cloud body * tint = tint colour.
+    col *= uTint;
 
     // tone map + gamma
     col = vec3(1.0) - exp(-col * 1.25);

@@ -85,6 +85,7 @@ export const volumeFragmentShader = /* glsl */ `
   uniform float uLightReach;    // how far light climbs before fading (0..1 of height)
   uniform vec3  uSkyBottom;     // cloud-view background gradient (bottom)
   uniform vec3  uSkyTop;        // cloud-view background gradient (top)
+  uniform vec3  uTint;          // timeline tint (white = neutral)
 
   // Cloud density at a world point inside the box: smooth dome-like body
   // without bump/noise controls.
@@ -170,7 +171,8 @@ export const volumeFragmentShader = /* glsl */ `
           float climb = exp(-cy / max(0.05, uLightReach));
           vec3 L = emissionAt(uv, cy) * climb * uTransmission * (1.15 - 0.35 * cy);
 
-          vec3 scat = body + L;
+          // Apply timeline tint as coloured illumination on the cloud medium.
+          vec3 scat = (body + L) * uTint;
           float a = 1.0 - exp(-20.0 * dens * stepLen);
           col += trans * a * scat;
           trans *= (1.0 - a);
