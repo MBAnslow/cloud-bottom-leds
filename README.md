@@ -15,7 +15,7 @@ The pattern engine is the single source of truth: every frame it computes an
 RGB color for each LED, which feeds **both** the on-screen cloud visualizer and
 the bytes sent to the hardware. What you see is what the strips show.
 
-![grid](docs/placeholder) <!-- run it and screenshot -->
+![The Cloud Bottom LEDs interface: the panel preview with the tint timeline below it, pattern and breathing controls on the left, and the physical build parameters on the right.](docs/interface.png)
 
 ## Features
 
