@@ -1,16 +1,122 @@
 import * as THREE from "three";
-import { defaultConfig, type Config } from "./config";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { defaultConfig, type CloudSkyPreset, type Config } from "./config";
 import { LedField } from "./ledField";
 import { renderPattern } from "./patterns";
+import { applyCloudDynamics } from "./cloudDynamics";
 import { fragmentShader, vertexShader } from "./cloudShader";
+import {
+  fullscreenVertexShader,
+  emissionFragmentShader,
+  volumeFragmentShader,
+} from "./cloudVolumeShader";
 import { Streamer, type StreamStatus } from "./streamer";
-import { buildGui } from "./gui";
-import { getLedType } from "./ledTypes";
+import { buildGui, type GuiHandle } from "./gui";
+import { getLedType, maxGrid } from "./ledTypes";
 import { applyBreathing, renderPartitionSolo, partitionCount } from "./breathing";
 import { BreatheViz } from "./breatheViz";
 import { MaskOverlay } from "./maskOverlay";
+import { CentroidOverlay } from "./centroidOverlay";
+import { applyTimelineTint, advanceTimelineTint, tintColorAt } from "./timelineTint";
+import { TimelineWidget } from "./timelineWidget";
 
-const cfg: Config = { ...defaultConfig };
+const DEFAULT_CONFIG_STORAGE_KEY = "cloud-bottom-leds.default-config.v1";
+
+function cloneConfig(src: Config): Config {
+  return {
+    ...src,
+    breatheColors: [...src.breatheColors],
+    patternPalettes: { ...src.patternPalettes },
+    tintSwatches: src.tintSwatches.map((s) => ({ time: s.time, color: s.color })),
+  };
+}
+
+function applyConfig(target: Config, source: Partial<Config>) {
+  for (const key of Object.keys(defaultConfig) as Array<keyof Config>) {
+    if (!(key in source)) continue;
+    const next = source[key];
+    if (next === undefined) continue;
+    if (key === "breatheColors" && Array.isArray(next)) {
+      target.breatheColors = (next as unknown[]).filter(
+        (v): v is string => typeof v === "string",
+      );
+      continue;
+    }
+    if (key === "patternPalettes" && typeof next === "object" && next) {
+      target.patternPalettes = {
+        ...defaultConfig.patternPalettes,
+        ...(next as Config["patternPalettes"]),
+      };
+      continue;
+    }
+    if (key === "tintSwatches" && Array.isArray(next)) {
+      // Defensive parse so a malformed localStorage entry can't crash boot.
+      target.tintSwatches = (next as unknown[])
+        .filter(
+          (s): s is { time: number; color: string } =>
+            !!s &&
+            typeof s === "object" &&
+            typeof (s as { time?: unknown }).time === "number" &&
+            typeof (s as { color?: unknown }).color === "string",
+        )
+        .map((s) => ({ time: s.time, color: s.color }));
+      continue;
+    }
+    if (key === "partitionBlend" && next === "average") {
+      target.partitionBlend = "normal";
+      continue;
+    }
+    if (key === "fps") {
+      if (typeof next === "number" && Number.isFinite(next)) {
+        target.fps = Math.max(1, Math.min(60, next));
+      }
+      continue;
+    }
+    (target[key] as Config[keyof Config]) = next as Config[keyof Config];
+  }
+  // Back-compat: if unified fps is absent, fold legacy fps fields into it.
+  if (typeof source.fps !== "number") {
+    const legacyFps =
+      typeof source.streamFps === "number"
+        ? source.streamFps
+        : typeof source.patternFps === "number"
+          ? source.patternFps
+          : undefined;
+    if (typeof legacyFps === "number" && Number.isFinite(legacyFps)) {
+      target.fps = Math.max(1, Math.min(60, legacyFps));
+    }
+  }
+  // Back-compat: before DDP, the default WLED realtime UDP port was 21324.
+  // If a saved config still has that legacy default, migrate to DDP default.
+  if (source.wledPort === 21324) {
+    target.wledPort = 4048;
+  }
+}
+
+function readStoredDefaultConfig(): Partial<Config> | null {
+  try {
+    const raw = localStorage.getItem(DEFAULT_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as Partial<Config>;
+  } catch {
+    return null;
+  }
+}
+
+function saveDefaultConfig(cfg: Config) {
+  localStorage.setItem(DEFAULT_CONFIG_STORAGE_KEY, JSON.stringify(cloneConfig(cfg)));
+}
+
+const cfg = cloneConfig(defaultConfig);
+const savedDefault = readStoredDefaultConfig();
+if (savedDefault) applyConfig(cfg, savedDefault);
+{
+  const { maxCols, maxRows } = maxGrid(cfg.ledType, cfg.cloudWidthMm, cfg.cloudHeightMm);
+  cfg.cols = Math.max(1, Math.min(cfg.cols, maxCols));
+  cfg.rows = Math.max(1, Math.min(cfg.rows, maxRows));
+}
 
 // --- Three.js setup ---
 const container = document.getElementById("app")!;
@@ -80,14 +186,13 @@ const uniforms: Record<string, THREE.IUniform> = {
   uRows: { value: cfg.rows },
   uCloudAspect: { value: cfg.cloudWidthMm / cfg.cloudHeightMm },
   uSigma: { value: new THREE.Vector2(1, 1) },
-  uLedGain: { value: cfg.ledBrightness },
+  uLedGain: { value: 1 },
   uWhiteMix: { value: 0 },
   uTransmission: { value: 1 - cfg.opacity / 100 },
-  uBumpHeight: { value: cfg.bumpHeight },
-  uBumpScale: { value: cfg.bumpScale },
-  uBumpDetail: { value: cfg.bumpDetail },
   uAmbient: { value: cfg.ambient },
   uBackground: { value: cfg.backgroundTint },
+  uTint: { value: new THREE.Vector3(1, 1, 1) },
+  uViewMode: { value: cfg.view === "cloud" ? 1 : 0 },
 };
 computeSigma(uniforms.uSigma.value as THREE.Vector2);
 
@@ -101,6 +206,161 @@ const material = new THREE.ShaderMaterial({
 const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
 quad.frustumCulled = false;
 scene.add(quad);
+
+// =====================================================================
+// 3D VOLUMETRIC VIEW — the real build: LEDs embedded in the cloud base
+// throwing light up into a ray-marched cloud volume, orbited with a camera.
+// =====================================================================
+
+// Pass 1 target: the LED glow leaving the base plane (footprint UV space).
+const EMIT_RES = 384;
+const emissionRT = new THREE.WebGLRenderTarget(EMIT_RES, EMIT_RES, {
+  type: THREE.FloatType,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  wrapS: THREE.ClampToEdgeWrapping,
+  wrapT: THREE.ClampToEdgeWrapping,
+  depthBuffer: false,
+  stencilBuffer: false,
+});
+const emissionUniforms: Record<string, THREE.IUniform> = {
+  uLeds: { value: ledField.texture },
+  uCols: { value: cfg.cols },
+  uRows: { value: cfg.rows },
+  uSigma: { value: uniforms.uSigma.value },
+  uLedGain: { value: 1 },
+  uWhiteMix: { value: 0 },
+};
+const emissionScene = new THREE.Scene();
+emissionScene.add(
+  Object.assign(
+    new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: emissionUniforms,
+        vertexShader: fullscreenVertexShader,
+        fragmentShader: emissionFragmentShader,
+        depthTest: false,
+        depthWrite: false,
+      })
+    ),
+    { frustumCulled: false }
+  )
+);
+
+// Pass 2: the volume ray-march (full-screen; rays reconstructed from the
+// perspective camera's matrices, which OrbitControls drives).
+const volUniforms: Record<string, THREE.IUniform> = {
+  uResolution: { value: new THREE.Vector2(1, 1) },
+  uInvViewProj: { value: new THREE.Matrix4() },
+  uCamPos: { value: new THREE.Vector3() },
+  uEmission: { value: emissionRT.texture },
+  uBoxHalf: { value: new THREE.Vector3(0.5, 0.4, 0.5) },
+  uCloudDensity: { value: cfg.cloudDensity },
+  uAmbient: { value: cfg.ambient },
+  uTransmission: { value: 1 - cfg.opacity / 100 },
+  uLightReach: { value: 0.5 },
+  uSkyBottom: { value: new THREE.Vector3(0.016, 0.02, 0.032) },
+  uSkyTop: { value: new THREE.Vector3(0.05, 0.06, 0.085) },
+  uTint: { value: new THREE.Vector3(1, 1, 1) },
+};
+const volScene = new THREE.Scene();
+volScene.add(
+  Object.assign(
+    new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: volUniforms,
+        vertexShader: fullscreenVertexShader,
+        fragmentShader: volumeFragmentShader,
+        depthTest: false,
+        depthWrite: false,
+      })
+    ),
+    { frustumCulled: false }
+  )
+);
+
+// Perspective camera + orbit controls (active only in the cloud view). The
+// default angle looks up at the cloud from slightly below and to the side, so
+// the lit underside (where the LEDs live) reads immediately.
+const orbitCam = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+orbitCam.position.set(0.7, -0.12, 1.55);
+const controls = new OrbitControls(orbitCam, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.4;
+controls.maxDistance = 6;
+controls.target.set(0, 0.16, 0);
+controls.enabled = false;
+controls.update();
+
+const _view = new THREE.Matrix4();
+const _vp = new THREE.Matrix4();
+
+const CLOUD_SKIES: Record<CloudSkyPreset, { bottom: [number, number, number]; top: [number, number, number] }> = {
+  night: { bottom: [0.0025, 0.0035, 0.006], top: [0.012, 0.016, 0.026] },
+  dawn: { bottom: [0.18, 0.14, 0.18], top: [0.56, 0.44, 0.42] },
+  daylight: { bottom: [0.50, 0.62, 0.84], top: [0.78, 0.88, 1.0] },
+  dusk: { bottom: [0.14, 0.11, 0.16], top: [0.40, 0.30, 0.40] },
+};
+
+/** Box half-extents in normalised world units (longest footprint axis = 1). */
+function cloudBoxHalf(out: THREE.Vector3) {
+  const w = cfg.cloudWidthMm;
+  const d = cfg.cloudHeightMm; // the other footprint dimension
+  const maxDim = Math.max(w, d);
+  const hx = 0.5 * (w / maxDim);
+  const hz = 0.5 * (d / maxDim);
+  const hy = Math.max(0.05, cfg.cloudThicknessMm / maxDim);
+  out.set(hx, hy, hz);
+}
+
+/** Render the 3D volumetric cloud view (emission pass -> ray-march pass). */
+function renderCloudVolume(w: number, h: number) {
+  // Pass 1: LED emission into the offscreen target.
+  emissionUniforms.uLeds.value = ledField.texture;
+  emissionUniforms.uCols.value = cfg.cols;
+  emissionUniforms.uRows.value = cfg.rows;
+  emissionUniforms.uSigma.value = uniforms.uSigma.value;
+  const led = getLedType(cfg.ledType);
+  emissionUniforms.uLedGain.value = 1;
+  emissionUniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
+  renderer.setRenderTarget(emissionRT);
+  renderer.render(emissionScene, camera);
+  renderer.setRenderTarget(null);
+
+  // Camera matrices for ray reconstruction.
+  orbitCam.aspect = w / Math.max(1, h);
+  orbitCam.updateProjectionMatrix();
+  orbitCam.updateMatrixWorld(true);
+  _view.copy(orbitCam.matrixWorld).invert();
+  _vp.multiplyMatrices(orbitCam.projectionMatrix, _view);
+  (volUniforms.uInvViewProj.value as THREE.Matrix4).copy(_vp).invert();
+  (volUniforms.uCamPos.value as THREE.Vector3).copy(orbitCam.position);
+  (volUniforms.uResolution.value as THREE.Vector2).set(w, h);
+  cloudBoxHalf(volUniforms.uBoxHalf.value as THREE.Vector3);
+  volUniforms.uCloudDensity.value = cfg.cloudDensity;
+  volUniforms.uAmbient.value = cfg.ambient;
+  volUniforms.uTransmission.value = 1 - cfg.opacity / 100;
+  const sky = CLOUD_SKIES[cfg.cloudSky];
+  let nightScale = 1;
+  if (cfg.cloudSky === "night") {
+    // 0 = preset values, 1 = much darker night.
+    nightScale = 1 - cfg.cloudNightDarkness * 0.92;
+  }
+  (volUniforms.uSkyBottom.value as THREE.Vector3).set(
+    sky.bottom[0] * nightScale,
+    sky.bottom[1] * nightScale,
+    sky.bottom[2] * nightScale
+  );
+  (volUniforms.uSkyTop.value as THREE.Vector3).set(
+    sky.top[0] * nightScale,
+    sky.top[1] * nightScale,
+    sky.top[2] * nightScale
+  );
+  renderer.render(volScene, camera);
+}
 
 // --- Streaming ---
 const streamer = new Streamer();
@@ -120,23 +380,47 @@ function applyStreaming() {
   }
 }
 
+function onLayoutChange() {
+  ledField.resize(cfg);
+  uniforms.uLeds.value = ledField.texture;
+  uniforms.uCols.value = cfg.cols;
+  uniforms.uRows.value = cfg.rows;
+  if (cfg.streamEnabled) streamer.reconfigure(cfg, ledField.count);
+}
+
+function loadDefaultConfigIntoSession() {
+  const saved = readStoredDefaultConfig();
+  if (saved) {
+    applyConfig(cfg, saved);
+  } else {
+    applyConfig(cfg, defaultConfig);
+  }
+  const { maxCols, maxRows } = maxGrid(cfg.ledType, cfg.cloudWidthMm, cfg.cloudHeightMm);
+  cfg.cols = Math.max(1, Math.min(cfg.cols, maxCols));
+  cfg.rows = Math.max(1, Math.min(cfg.rows, maxRows));
+  onLayoutChange();
+  rebuildSwatches();
+  refreshBuffer();
+  applyStreaming();
+  guiHandle?.refreshFromConfig();
+}
+
 // --- GUI ---
-buildGui(cfg, {
-  onLayoutChange: () => {
-    ledField.resize(cfg);
-    uniforms.uLeds.value = ledField.texture;
-    uniforms.uCols.value = cfg.cols;
-    uniforms.uRows.value = cfg.rows;
-    if (cfg.streamEnabled) streamer.reconfigure(cfg, ledField.count);
-  },
+let guiHandle: GuiHandle | null = null;
+guiHandle = buildGui(cfg, {
+  onLayoutChange,
   onStreamToggle: applyStreaming,
   onStreamReconfigure: () => streamer.reconfigure(cfg, ledField.count),
 });
 
+const saveDefaultBtn = document.getElementById("cfg-save");
+const loadDefaultBtn = document.getElementById("cfg-load");
+saveDefaultBtn?.addEventListener("click", () => saveDefaultConfig(cfg));
+loadDefaultBtn?.addEventListener("click", loadDefaultConfigIntoSession);
+
 // --- Resize ---
-// The cloud canvas fills its (#app) container, which is inset from the side
-// menus and the bottom oscilloscope, so the cloud stays centred and clear of
-// the UI. Size the renderer to the container, not the whole window.
+// The cloud canvas fills the middle display region (#app), with breathing above
+// and the two menu columns below, so size from the container not the window.
 function onResize() {
   const w = Math.max(1, container.clientWidth);
   const h = Math.max(1, container.clientHeight);
@@ -176,7 +460,7 @@ function rebuildSwatches() {
   }
 }
 function stepPartitions(delta: number) {
-  cfg.partitions = Math.max(2, Math.min(6, partitionCount(cfg) + delta));
+  cfg.partitions = Math.max(1, Math.min(6, partitionCount(cfg) + delta));
   rebuildSwatches();
 }
 document.getElementById("breathe-parts-dec")!.addEventListener("click", () => stepPartitions(-1));
@@ -186,6 +470,52 @@ rebuildSwatches();
 // Mask-layout overlay: superimposes each partition's mask over its position,
 // aligned to the (inset) cloud canvas.
 const maskOverlay = new MaskOverlay(renderer.domElement);
+// Draggable centroids for partition layouts (panel view).
+const centroidOverlay = new CentroidOverlay(renderer.domElement);
+
+// 24h timeline tint widget (gradient strip with draggable swatches + playhead).
+const tintMount = document.getElementById("tint-timeline-mount")!;
+// Forward-declared so the widget's callback can poke the render pipeline as
+// soon as the user scrubs/edits a swatch (instead of waiting for the next
+// pattern step). The real `refreshBuffer` is defined a bit further down.
+const onTintInteract = () => refreshBuffer();
+const timelineWidget = new TimelineWidget(cfg, tintMount, () => onTintInteract());
+
+let dragPointerId: number | null = null;
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (!centroidOverlay.beginDrag(cfg, e.clientX, e.clientY)) return;
+  dragPointerId = e.pointerId;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  refreshBuffer();
+  e.preventDefault();
+});
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (centroidOverlay.isDragging) {
+    if (dragPointerId !== null && e.pointerId !== dragPointerId) return;
+    if (centroidOverlay.dragTo(cfg, e.clientX, e.clientY)) refreshBuffer();
+    e.preventDefault();
+    return;
+  }
+  centroidOverlay.hoverAt(cfg, e.clientX, e.clientY);
+});
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (dragPointerId !== null && e.pointerId === dragPointerId) {
+    dragPointerId = null;
+    centroidOverlay.endDrag();
+    renderer.domElement.releasePointerCapture(e.pointerId);
+    refreshBuffer();
+  }
+});
+renderer.domElement.addEventListener("pointercancel", (e) => {
+  if (dragPointerId !== null && e.pointerId === dragPointerId) {
+    dragPointerId = null;
+    centroidOverlay.endDrag();
+    refreshBuffer();
+  }
+});
+renderer.domElement.addEventListener("pointerleave", () => {
+  centroidOverlay.clearHover();
+});
 
 // --- Solo preview (hover an oscilloscope lane to isolate that partition) ---
 let hoverPartition: number | null = null;
@@ -199,8 +529,11 @@ vizCanvas.addEventListener("mouseleave", () => {
 });
 
 /**
- * Render the base buffer: the pattern layer (or black when the pattern is
- * toggled off) with the breathing layer composited on top.
+ * Fixed pipeline:
+ *   pattern -> breathing mix -> cloud dynamics modulation.
+ * User only chooses how breathing mixes with pattern (`breatheBlend`).
+ * Dynamics is applied to the composite so the cloud ripple remains visible even
+ * when breathing colour is dominant.
  */
 function renderBase(step: number) {
   if (cfg.patternEnabled) {
@@ -209,11 +542,16 @@ function renderBase(step: number) {
     ledField.colors.fill(0);
   }
   applyBreathing(ledField.colors, patternTime, cfg);
+  applyCloudDynamics(ledField.colors, patternTime, cfg);
+  // Timeline tint is the final colour wash (multiplied over the composite) so
+  // every layer is uniformly tinted. Emitter drive (a flat brightness gain)
+  // comes after so the tinted signal still respects the LED type / drive.
+  applyTimelineTint(ledField.colors, cfg);
 }
 
 /** Recompute the normal pattern+breathing buffer once (used when leaving a preview). */
 function refreshBuffer() {
-  const step = 1 / Math.max(1, cfg.patternFps);
+  const step = 1 / Math.max(1, Math.min(60, cfg.fps));
   renderBase(step);
   dirty = true;
 }
@@ -225,6 +563,90 @@ let fpsAccum = 0;
 let fpsFrames = 0;
 let fpsTimer = 0;
 
+// --- Streamed-bytes RGB histogram (overlaid on the LED canvas) ---
+const histCanvas = document.getElementById("stream-hist") as HTMLCanvasElement;
+const histCtx = histCanvas.getContext("2d");
+// 16 bins, each spanning 16 byte values (0..255).
+const HIST_BIN_WIDTH = 16;
+const HIST_BINS = 256 / HIST_BIN_WIDTH;
+const histR = new Float32Array(HIST_BINS);
+const histG = new Float32Array(HIST_BINS);
+const histB = new Float32Array(HIST_BINS);
+
+// Sync the histogram bitmap to its CSS box so the bars stay crisp when the
+// window is resized. (Otherwise the canvas defaults to its `width="…"` HTML
+// attribute and gets visually stretched.)
+function resizeHistCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = histCanvas.getBoundingClientRect();
+  histCanvas.width = Math.max(2, Math.floor(rect.width * dpr));
+  histCanvas.height = Math.max(2, Math.floor(rect.height * dpr));
+}
+new ResizeObserver(resizeHistCanvas).observe(histCanvas);
+resizeHistCanvas();
+
+/** Draw a per-channel histogram (R,G,B) of the exact bytes sent to the strips. */
+function drawStreamHistogram(bytes: Uint8Array) {
+  if (!histCtx) return;
+  const W = histCanvas.width;
+  const H = histCanvas.height;
+  // Scale all geometry / fonts by dpr so the rendering stays crisp + legible
+  // when the bitmap is larger than the CSS box.
+  const s = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const axisH = 12 * s; // reserved strip for the 0..255 axis labels
+  const plotH = H - axisH;
+  histR.fill(0);
+  histG.fill(0);
+  histB.fill(0);
+  for (let i = 0; i + 2 < bytes.length; i += 3) {
+    histR[(bytes[i] / HIST_BIN_WIDTH) | 0]++;
+    histG[(bytes[i + 1] / HIST_BIN_WIDTH) | 0]++;
+    histB[(bytes[i + 2] / HIST_BIN_WIDTH) | 0]++;
+  }
+  // Shared scale across channels so relative heights are meaningful.
+  let peak = 1;
+  for (let b = 0; b < HIST_BINS; b++) {
+    if (histR[b] > peak) peak = histR[b];
+    if (histG[b] > peak) peak = histG[b];
+    if (histB[b] > peak) peak = histB[b];
+  }
+  const norm = plotH / (Math.log1p(peak) || 1);
+  const binW = W / HIST_BINS;
+
+  histCtx.clearRect(0, 0, W, H);
+
+  // Per-bin grouped bars (R, G, B side by side within each bin).
+  const gap = Math.max(1, binW * 0.08);
+  const barW = (binW - gap * 2) / 3;
+  const channels: Array<[Float32Array, string]> = [
+    [histR, "rgba(255,80,80,0.95)"],
+    [histG, "rgba(70,225,110,0.95)"],
+    [histB, "rgba(95,155,255,0.95)"],
+  ];
+  for (let b = 0; b < HIST_BINS; b++) {
+    const x0 = b * binW + gap;
+    for (let ch = 0; ch < 3; ch++) {
+      const [hist, color] = channels[ch];
+      const h = Math.log1p(hist[b]) * norm;
+      histCtx.fillStyle = color;
+      histCtx.fillRect(x0 + ch * barW, plotH - h, barW, h);
+    }
+  }
+
+  // Axis: 0 .. 255 so it's clear this is RGB byte space.
+  histCtx.fillStyle = "rgba(255,255,255,0.10)";
+  histCtx.fillRect(0, plotH, W, Math.max(1, s));
+  histCtx.fillStyle = "rgba(207,214,230,0.8)";
+  histCtx.font = `${Math.round(9 * s)}px ui-sans-serif, system-ui, sans-serif`;
+  histCtx.textBaseline = "bottom";
+  const ticks = [0, 64, 128, 192, 255];
+  for (const t of ticks) {
+    const x = (t / 255) * W;
+    histCtx.textAlign = t === 0 ? "left" : t === 255 ? "right" : "center";
+    histCtx.fillText(String(t), Math.min(W - 1, Math.max(1, x)), H);
+  }
+}
+
 // --- Render loop ---
 const clock = new THREE.Clock();
 // The pattern advances on its own fixed-rate clock so we can simulate the real
@@ -232,6 +654,9 @@ const clock = new THREE.Clock();
 let patternTime = 0;
 let patternAccum = 0;
 let dirty = true; // LED colors changed -> re-upload + (maybe) stream
+// Tracks the cloud aspect mirrored into the `--ui-app-aspect` CSS variable,
+// so we only update the DOM when the cloud width/height actually change.
+let lastAppAspect = -1;
 
 // Cap rendering at 60fps; there's nothing to gain past it (the diffuser is
 // static and the pattern has its own update rate), so skip extra frames on
@@ -251,8 +676,11 @@ function frame() {
 
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  // 1) advance the pattern only at the configured update rate (source of truth)
-  const step = 1 / Math.max(1, cfg.patternFps);
+  // Advance the 24h timeline tint clock (drives the playhead + colour wash).
+  advanceTimelineTint(cfg, dt);
+
+  // 1) Simulation stepping (shared with stream fps target).
+  const step = 1 / Math.max(1, Math.min(60, cfg.fps));
   patternAccum += dt;
   let steps = 0;
   while (patternAccum >= step && steps < 8) {
@@ -265,11 +693,19 @@ function frame() {
     dirty = true;
     steps++;
   }
+  // If the timeline is playing but no pattern step fired this frame, the LED
+  // buffer is stale w.r.t. the new tint time. Re-bake once so the tint wash
+  // animates smoothly.
+  if (steps === 0 && cfg.tintEnabled && cfg.tintPlaying) {
+    renderBase(step);
+    dirty = true;
+  }
 
   // 1b) solo preview: hovering a lane shows just that partition's breathing
   // (pattern off, all others off). Done every frame so it updates immediately.
   if (hoverPartition !== null) {
     renderPartitionSolo(ledField.colors, patternTime, cfg, hoverPartition);
+    applyCloudDynamics(ledField.colors, patternTime, cfg);
     dirty = true;
     wasPreviewing = true;
   } else if (wasPreviewing) {
@@ -282,28 +718,68 @@ function frame() {
   if (dirty) ledField.uploadToTexture();
   const led = getLedType(cfg.ledType);
   uniforms.uTime.value = patternTime;
-  uniforms.uCloudAspect.value = cfg.cloudWidthMm / Math.max(1, cfg.cloudHeightMm);
+  const tintRgb = cfg.tintEnabled ? tintColorAt(cfg.tintSwatches, cfg.tintTime) : [1, 1, 1];
+  (uniforms.uTint.value as THREE.Vector3).set(tintRgb[0], tintRgb[1], tintRgb[2]);
+  (volUniforms.uTint.value as THREE.Vector3).set(tintRgb[0], tintRgb[1], tintRgb[2]);
+  const cloudAspect = cfg.cloudWidthMm / Math.max(1, cfg.cloudHeightMm);
+  uniforms.uCloudAspect.value = cloudAspect;
+  // Mirror the aspect into a CSS variable so the `#app` width can clamp to
+  // the cloud's natural aspect: the visualisation fills its canvas without
+  // dead horizontal margins.
+  if (lastAppAspect !== cloudAspect) {
+    document.documentElement.style.setProperty("--ui-app-aspect", cloudAspect.toFixed(4));
+    lastAppAspect = cloudAspect;
+  }
   computeSigma(uniforms.uSigma.value as THREE.Vector2);
-  uniforms.uLedGain.value = cfg.ledBrightness * led.relBrightness;
+  uniforms.uLedGain.value = 1;
   uniforms.uWhiteMix.value = led.rgbw ? 0.35 : 0;
   uniforms.uTransmission.value = 1 - cfg.opacity / 100;
-  uniforms.uBumpHeight.value = cfg.bumpHeight;
-  uniforms.uBumpScale.value = cfg.bumpScale;
-  uniforms.uBumpDetail.value = cfg.bumpDetail;
   uniforms.uAmbient.value = cfg.ambient;
   uniforms.uBackground.value = cfg.backgroundTint;
-  renderer.render(scene, camera);
+  uniforms.uViewMode.value = 0;
+
+  const cloudView = cfg.view === "cloud";
+  controls.enabled = cloudView;
+  if (cloudView) {
+    controls.update();
+    const w = (uniforms.uResolution.value as THREE.Vector2).x;
+    const h = (uniforms.uResolution.value as THREE.Vector2).y;
+    renderCloudVolume(w, h);
+  } else {
+    renderer.render(scene, camera);
+  }
 
   // breathing readout on the left (highlight the soloed lane)
   breathePanel.classList.toggle("hidden", !cfg.breatheEnabled);
   if (cfg.breatheEnabled) breatheViz.draw(cfg, patternTime, hoverPartition);
 
-  // mask-layout overlay (superimposed mask shapes over their positions)
-  maskOverlay.draw(cfg);
+  // mask-layout overlay only makes sense over the flat panel.
+  maskOverlay.draw(cloudView ? { ...cfg, maskShowOverlay: false } : cfg, now * 0.001);
+  centroidOverlay.draw(cfg);
+
+  // Always redraw the 24h tint timeline so the playhead + swatches stay live.
+  timelineWidget.draw();
 
   // 3) stream to hardware at the configured data rate
-  if (cfg.streamEnabled && streamer.isOpen && dirty) {
-    streamer.sendFrame(ledField.toBytes(cfg.wiring), cfg.streamFps, now);
+  if (dirty) {
+    const frameBytes = ledField.toBytes(
+      cfg.wiring,
+      cfg.streamChannelOrder,
+      cfg.streamGamma,
+      cfg.streamExposure,
+      {
+      saturation: cfg.streamSaturation,
+      redGain: cfg.streamRedGain,
+      greenGain: cfg.streamGreenGain,
+      blueGain: cfg.streamBlueGain,
+      }
+    );
+    // Stream the current rendered frame (no extra frame of intentional delay).
+    if (cfg.streamEnabled && streamer.isOpen) {
+      streamer.sendFrame(frameBytes, cfg.fps, now);
+    }
+    // Histogram of the exact bytes we (would) stream.
+    drawStreamHistogram(frameBytes);
   }
   dirty = false;
 
@@ -316,7 +792,7 @@ function frame() {
     const sig = uniforms.uSigma.value as THREE.Vector2;
     const wCm = cfg.cloudWidthMm / 10;
     const hCm = cfg.cloudHeightMm / 10;
-    hudFps.textContent = `${fps.toFixed(0)} fps render · ${cfg.patternFps} fps pattern · ${ledField.count} LEDs`;
+    hudFps.textContent = `${fps.toFixed(0)} fps render · ${cfg.fps.toFixed(0)} fps sim/stream · ${ledField.count} LEDs`;
     const evenness = sig.x >= 1.0 ? "even" : sig.x >= 0.6 ? "soft dots" : "hotspots";
     hudGrid.textContent =
       `${cfg.cols}×${cfg.rows} · ${wCm.toFixed(0)}×${hCm.toFixed(0)} cm · ` +

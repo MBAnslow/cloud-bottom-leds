@@ -5,21 +5,29 @@ import { WebSocketServer } from "ws";
 
 /**
  * Bridge server: accepts LED frames from the browser over WebSocket and relays
- * them to a WLED controller using its real-time UDP protocol (DNRGB, port 21324).
+ * them to a WLED controller using DDP over UDP.
  *
  * Why this exists: browsers cannot send raw UDP. The simulator computes frames
  * and this process forwards the exact same bytes to the physical strips.
  *
- *   WLED DNRGB packet:
- *     [0]=4 (DNRGB), [1]=timeout(s), [2]=startHi, [3]=startLo, then RGB...
- *   WLED applies the frame, and reverts to its normal mode after `timeout`s of
- *   no packets. We chunk at 489 LEDs/packet to stay within WLED's UDP buffer.
+ * DDP packet (10-byte header + RGB payload):
+ *   [0] flags1 (version=1 in bits 7..6, PUSH bit in bit0)
+ *   [1] flags2 (unused)
+ *   [2] data type (1 = RGB data)
+ *   [3] destination id (1)
+ *   [4..7] data offset (bytes, big-endian)
+ *   [8..9] data length (bytes, big-endian)
+ *   [10..] RGB data bytes
  */
 
 const HTTP_PORT = Number(process.env.PORT ?? 8081);
-const DNRGB = 4;
-const REALTIME_TIMEOUT_S = 2;
-const MAX_LEDS_PER_PACKET = 489;
+const DDP_PORT = 4048;
+const DDP_TYPE_DATA = 0x01;
+const DDP_DEST_ID = 0x01;
+const DDP_FLAGS_VERSION_1 = 0x40;
+const DDP_FLAGS_PUSH = 0x01;
+// Keep payload under common Ethernet MTU once UDP/IP headers are added.
+const MAX_DDP_PAYLOAD_BYTES = 1440;
 
 const app = express();
 app.use(express.static("dist")); // serves a production build if present
@@ -31,9 +39,20 @@ const udp = dgram.createSocket("udp4");
 
 wss.on("connection", (ws, req) => {
   const peer = req.socket.remoteAddress;
-  let target = { host: null, port: 21324, count: 0 };
+  let target = { host: null, port: DDP_PORT, count: 0 };
   let frames = 0;
+  let latestFrame = null;
+  let frameDirty = false;
   console.log(`[ws] client connected from ${peer}`);
+
+  // Low-latency relay: always send only the newest frame.
+  const tick = setInterval(() => {
+    if (!target.host || !frameDirty || !latestFrame) return;
+    sendToWledDdp(latestFrame, target);
+    frameDirty = false;
+    frames++;
+    if (frames % 200 === 0) console.log(`[ddp] sent ${frames} frames to ${target.host}`);
+  }, 1000 / 60);
 
   ws.on("message", (data, isBinary) => {
     if (!isBinary) {
@@ -42,7 +61,7 @@ wss.on("connection", (ws, req) => {
         if (msg.type === "config") {
           target = {
             host: msg.host,
-            port: Number(msg.port) || 21324,
+            port: Number(msg.port) || DDP_PORT,
             count: Number(msg.count) || 0,
           };
           console.log(`[ws] target -> ${target.host}:${target.port} (${target.count} LEDs)`);
@@ -54,30 +73,33 @@ wss.on("connection", (ws, req) => {
     }
 
     if (!target.host) return; // not configured yet
-    const rgb = Buffer.from(data);
-    sendToWled(rgb, target);
-    frames++;
-    if (frames % 200 === 0) console.log(`[udp] sent ${frames} frames to ${target.host}`);
+    // Overwrite any unsent frame so stale frames cannot queue up.
+    latestFrame = Buffer.from(data);
+    frameDirty = true;
   });
 
-  ws.on("close", () => console.log(`[ws] client ${peer} disconnected`));
+  ws.on("close", () => {
+    clearInterval(tick);
+    console.log(`[ws] client ${peer} disconnected`);
+  });
   ws.on("error", (err) => console.warn(`[ws] error: ${err.message}`));
 });
 
-function sendToWled(rgb, target) {
-  const totalLeds = Math.floor(rgb.length / 3);
-  for (let start = 0; start < totalLeds; start += MAX_LEDS_PER_PACKET) {
-    const ledsInPacket = Math.min(MAX_LEDS_PER_PACKET, totalLeds - start);
-    const header = Buffer.from([
-      DNRGB,
-      REALTIME_TIMEOUT_S,
-      (start >> 8) & 0xff,
-      start & 0xff,
-    ]);
-    const body = rgb.subarray(start * 3, (start + ledsInPacket) * 3);
-    const packet = Buffer.concat([header, body]);
+function sendToWledDdp(rgb, target) {
+  const total = rgb.length;
+  for (let start = 0; start < total; start += MAX_DDP_PAYLOAD_BYTES) {
+    const chunkLen = Math.min(MAX_DDP_PAYLOAD_BYTES, total - start);
+    const isLast = start + chunkLen >= total;
+    const packet = Buffer.allocUnsafe(10 + chunkLen);
+    packet[0] = DDP_FLAGS_VERSION_1 | (isLast ? DDP_FLAGS_PUSH : 0);
+    packet[1] = 0x00;
+    packet[2] = DDP_TYPE_DATA;
+    packet[3] = DDP_DEST_ID;
+    packet.writeUInt32BE(start, 4);
+    packet.writeUInt16BE(chunkLen, 8);
+    rgb.copy(packet, 10, start, start + chunkLen);
     udp.send(packet, target.port, target.host, (err) => {
-      if (err) console.warn(`[udp] send error: ${err.message}`);
+      if (err) console.warn(`[ddp] send error: ${err.message}`);
     });
   }
 }

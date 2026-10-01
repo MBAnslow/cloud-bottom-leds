@@ -1,6 +1,27 @@
-export type WiringOrder = "row-major" | "serpentine";
+export type WiringOrder = "row-major" | "serpentine" | "column-major" | "column-serpentine";
+export type StreamChannelOrder = "RGB" | "RBG" | "GRB" | "GBR" | "BRG" | "BGR";
+
+/** One colour stop along the 24h timeline tint. `time` is normalised 0..1 (00:00..24:00). */
+export interface TintSwatch {
+  time: number;
+  color: string;
+}
+
+/**
+ * Which preview to render: the flat build panel (true to the physical rect, for
+ * dialing in pitch/spread) or a representational lit cloud silhouette (to judge
+ * how the underside of a real cloud would look).
+ */
+export type ViewMode = "panel" | "cloud";
+export const VIEW_MODES: ViewMode[] = ["panel", "cloud"];
+
+export type CloudSkyPreset = "night" | "dawn" | "daylight" | "dusk";
+export const CLOUD_SKY_PRESETS: CloudSkyPreset[] = ["night", "dawn", "daylight", "dusk"];
 
 export interface Config {
+  /** Which preview is shown on the main canvas. */
+  view: ViewMode;
+
   // --- Cloud dimensions (physical) ---
   /** Overall width of the cloud surface, in millimetres. */
   cloudWidthMm: number;
@@ -16,9 +37,11 @@ export interface Config {
   ledType: string;
 
   // --- Emitter (physical) ---
-  /** Relative luminous output / drive level of each LED (1 = nominal). Higher = brighter, can blow out to white hotspots. */
+  /** Deprecated: UI removed, emitter gain is fixed (kept for saved-config compatibility). */
   ledBrightness: number;
-  /** How many times per second the lighting pattern actually updates (controller refresh of the animation). */
+  /** Shared simulation + stream frame rate target (fps). */
+  fps: number;
+  /** Deprecated: use `fps` (kept for saved-config compatibility). */
   patternFps: number;
 
   // --- Diffuser (physical) ---
@@ -29,13 +52,15 @@ export interface Config {
   /** Diffuser opacity as a percentage of light blocked (0 = clear, 100 = opaque). Transmittance = 1 - opacity. */
   opacity: number;
 
-  // --- Cloud surface shape ---
-  /** Height/strength of the cloud bumps (also modulates local thickness/transmission). */
-  bumpHeight: number;
-  /** Spatial frequency of the bumps (bigger = smaller, denser bumps). */
-  bumpScale: number;
-  /** Octaves of fbm noise used for the cloud shape. */
-  bumpDetail: number;
+  // --- Cloud shape (3D volumetric view) ---
+  /** Vertical thickness of the cloud volume above the LED plane, in millimetres. */
+  cloudThicknessMm: number;
+  /** Overall optical density of the cloud volume (how thick/opaque it looks). */
+  cloudDensity: number;
+  /** Background sky preset for cloud view. */
+  cloudSky: CloudSkyPreset;
+  /** Extra darkening applied when `cloudSky` is `night` (0..1). */
+  cloudNightDarkness: number;
 
   // --- Pattern ---
   /** Master on/off for the animated pattern layer (off = breathing only). */
@@ -45,8 +70,24 @@ export interface Config {
   speed: number;
   /** Pattern content level 0..1 (the color values, applied to both visual + hardware output). */
   brightness: number;
-  /** Color palette hue offset in degrees. */
+  /** Color/palette phase offset in degrees. */
   hueShift: number;
+  /** Palette selection per pattern (so each pattern can use a different palette). */
+  patternPalettes: Record<PatternName, PaletteName>;
+  /** Post effect: add cloud-like motion after pattern + breathing. */
+  cloudDynamicsEnabled: boolean;
+  /** Noise style for cloud dynamics. */
+  cloudDynamicsType: CloudDynamicsNoise;
+  /** Strength of the dynamics modulation. */
+  cloudDynamicsAmount: number;
+  /** Spatial scale/frequency of the dynamics noise. */
+  cloudDynamicsScale: number;
+  /** Animation speed of the dynamics noise flow. */
+  cloudDynamicsSpeed: number;
+  /** Contrast/definition of the dynamics noise. */
+  cloudDynamicsContrast: number;
+  /** Cloud tint mix for dynamics: 0 = pure white cloud, 1 = full signal colour. */
+  cloudDynamicsWhiteMix: number;
 
   // --- Look ---
   /** Ambient base glow of the surface even with LEDs dark. */
@@ -57,7 +98,7 @@ export interface Config {
   // --- Breathing (per-partition underlying pulse) ---
   /** Master on/off for the breathing layer. */
   breatheEnabled: boolean;
-  /** Number of partitions (2..6). */
+  /** Number of partitions (1..6). */
   partitions: number;
   /** How the space is divided into partitions. */
   partitionLayout: PartitionLayout;
@@ -71,9 +112,13 @@ export interface Config {
   breatheRate: number;
   /** Depth of the pulse 0..1 (how far it dims at the trough). */
   breatheDepth: number;
-  /** Opacity of the breathing layer 0..1 (how strongly it shows over the pattern). */
+  /** Minimum brightness factor at breathing trough (0 = black, 1 = no dim). */
+  breatheMinBrightness: number;
+  /** Minimum chroma amount at breathing trough (0 = no breath colour, 1 = full colour). */
+  breatheMinColor: number;
+  /** Deprecated: breathing opacity is fixed at 1 (kept for saved-config compatibility). */
   breatheMix: number;
-  /** How the breathing layer is combined with the pattern (blend mode). */
+  /** How the breathing layer blends with the current layer stack backdrop. */
   breatheBlend: BlendMode;
   /** Phase spread across partitions 0..1 (0 = all in sync, 1 = a full cycle). */
   breatheStagger: number;
@@ -85,6 +130,22 @@ export interface Config {
   maskScale: number;
   /** Superimpose the per-partition masks over their positions in the scene. */
   maskShowOverlay: boolean;
+  /** For the "mask" layout: animate a slow continuous rotation of the masks. */
+  maskRotate: boolean;
+  /** Rotation speed in degrees per minute (negative = opposite direction). */
+  maskRotateDegPerMin: number;
+
+  // --- Timeline tint (24h color progression multiplied over the final signal) ---
+  /** Master on/off for the timeline tint layer. */
+  tintEnabled: boolean;
+  /** Whether the timeline is currently advancing. */
+  tintPlaying: boolean;
+  /** Current normalised position 0..1 along a midnight->midnight cycle. */
+  tintTime: number;
+  /** Real seconds for a full 24h cycle (lower = faster preview). */
+  tintCycleSeconds: number;
+  /** Colour stops along the day. Each `{ time: 0..1, color: '#hex' }`. */
+  tintSwatches: TintSwatch[];
 
   // --- Streaming to real hardware ---
   streamEnabled: boolean;
@@ -92,11 +153,25 @@ export interface Config {
   bridgeUrl: string;
   /** Target WLED controller IP. */
   wledHost: string;
-  /** WLED real-time UDP port (default 21324). */
+  /** WLED DDP UDP port (default 4048). */
   wledPort: number;
   /** Physical strip wiring order so the visual maps correctly to hardware. */
   wiring: WiringOrder;
-  /** Max frames/sec sent to hardware (visual still runs at full rate). */
+  /** Highlight-rolloff exposure for the stream (matches the on-screen tone map). Lower = dimmer/more rolloff. */
+  streamExposure: number;
+  /** Encoding gamma for the streamed bytes. 1 = linear (raw WS2812B / SPI controllers); raise if the controller applies its own gamma decode. */
+  streamGamma: number;
+  /** Byte order of color channels expected by the hardware/controller. */
+  streamChannelOrder: StreamChannelOrder;
+  /** Stream colour saturation in linear space: 1 = neutral, >1 richer colour, <1 washed out. */
+  streamSaturation: number;
+  /** Per-channel stream gain trim for calibrating LED white balance (red). */
+  streamRedGain: number;
+  /** Per-channel stream gain trim for calibrating LED white balance (green). */
+  streamGreenGain: number;
+  /** Per-channel stream gain trim for calibrating LED white balance (blue). */
+  streamBlueGain: number;
+  /** Deprecated: use `fps` (kept for saved-config compatibility). */
   streamFps: number;
 }
 
@@ -124,7 +199,7 @@ export const PARTITION_LAYOUTS: PartitionLayout[] = [
  * after the equivalent layer blend modes in graphics software. `normal` simply
  * overlays it; `additive` adds light (glow); `multiply` tints/pulses the
  * pattern; `screen`/`lighten` brighten; `darken`/`difference` etc. behave as in
- * Photoshop. The breathing opacity (`breatheMix`) controls how strongly it mixes.
+ * Photoshop.
  */
 export type BlendMode =
   | "normal"
@@ -151,13 +226,59 @@ export const BLEND_MODES: BlendMode[] = [
 
 /**
  * How overlapping partition oscillators combine into the single breathing layer
- * (before it is blended with the pattern). `average` is a weighted mean (the
+ * (before it is blended with the pattern). `normal` is a weighted mean (the
  * natural blend); `additive` sums them so overlaps get brighter; `lighten`
- * keeps the brightest; `screen` is a softer brighten.
+ * keeps the brightest; `screen` is a softer brighten. Extra modes (`multiply`,
+ * `darken`, `difference`) are available for more stylised interactions.
  */
-export type OscBlend = "average" | "additive" | "lighten" | "screen";
+export type OscBlend =
+  | "normal"
+  // Back-compat alias for older saved configs.
+  | "average"
+  | "additive"
+  | "lighten"
+  | "screen"
+  | "multiply"
+  | "darken"
+  | "difference";
 
-export const OSC_BLENDS: OscBlend[] = ["average", "additive", "lighten", "screen"];
+export const OSC_BLENDS: OscBlend[] = [
+  "normal",
+  "average",
+  "additive",
+  "lighten",
+  "screen",
+  "multiply",
+  "darken",
+  "difference",
+];
+
+export type CloudDynamicsNoise = "value" | "fbm" | "billow" | "ridged";
+export const CLOUD_DYNAMICS_NOISES: CloudDynamicsNoise[] = [
+  "value",
+  "fbm",
+  "billow",
+  "ridged",
+];
+
+export type PaletteName =
+  | "rainbow"
+  | "sunset"
+  | "ocean"
+  | "forest"
+  | "violet"
+  | "ember"
+  | "greyscale";
+
+export const PALETTE_NAMES: PaletteName[] = [
+  "rainbow",
+  "sunset",
+  "ocean",
+  "forest",
+  "violet",
+  "ember",
+  "greyscale",
+];
 
 export type PatternName =
   | "plasma"
@@ -181,29 +302,50 @@ export const PATTERN_NAMES: PatternName[] = [
 ];
 
 export const defaultConfig: Config = {
+  view: "panel",
+
   cloudWidthMm: 1200,
   cloudHeightMm: 600,
 
   rows: 8,
-  cols: 16,
+  cols: 32,
   ledType: "ws2812b-60",
 
-  ledBrightness: 2.0,
+  ledBrightness: 1.0,
+  fps: 60,
   patternFps: 60,
 
   ledDistanceMm: 40,
   diffuserScatterMm: 6,
   opacity: 35,
 
-  bumpHeight: 0.55,
-  bumpScale: 2.4,
-  bumpDetail: 4,
+  cloudThicknessMm: 450,
+  cloudDensity: 0.85,
+  cloudSky: "night",
+  cloudNightDarkness: 0.45,
 
   patternEnabled: true,
   pattern: "auroraDrift",
   speed: 1.0,
   brightness: 0.9,
   hueShift: 0,
+  patternPalettes: {
+    plasma: "rainbow",
+    rainbowWaves: "rainbow",
+    twinkle: "violet",
+    fire: "ember",
+    auroraDrift: "ocean",
+    breathe: "sunset",
+    rain: "ocean",
+    solid: "rainbow",
+  },
+  cloudDynamicsEnabled: false,
+  cloudDynamicsType: "fbm",
+  cloudDynamicsAmount: 0.2,
+  cloudDynamicsScale: 3.0,
+  cloudDynamicsSpeed: 0.45,
+  cloudDynamicsContrast: 1.2,
+  cloudDynamicsWhiteMix: 0.35,
 
   ambient: 0.04,
   backgroundTint: 0.02,
@@ -212,22 +354,44 @@ export const defaultConfig: Config = {
   partitions: 3,
   partitionLayout: "columns",
   partitionSoftness: 0.35,
-  partitionBlend: "average",
+  partitionBlend: "normal",
   partitionSeed: 1,
   breatheRate: 7,
   breatheDepth: 0.7,
-  breatheMix: 0.5,
+  breatheMinBrightness: 0.0,
+  breatheMinColor: 0.0,
+  breatheMix: 1.0,
   breatheBlend: "normal",
   breatheStagger: 0.25,
   breatheColors: ["#3aa0ff", "#ff5d8f", "#ffd166", "#06d6a0", "#b08cff", "#ff8c42"],
   maskInvert: false,
   maskScale: 0.6,
   maskShowOverlay: false,
+  maskRotate: false,
+  maskRotateDegPerMin: 30,
+
+  tintEnabled: false,
+  tintPlaying: false,
+  tintTime: 0.5,
+  tintCycleSeconds: 60,
+  tintSwatches: [
+    { time: 0.0, color: "#0a1a3a" }, // midnight: deep blue
+    { time: 0.25, color: "#ff8a3d" }, // 06:00: sunrise warm
+    { time: 0.5, color: "#ffffff" }, // noon: neutral white
+    { time: 0.75, color: "#ff5d2e" }, // 18:00: sunset
+  ],
 
   streamEnabled: false,
   bridgeUrl: "ws://localhost:8081",
-  wledHost: "192.168.1.50",
-  wledPort: 21324,
+  wledHost: "10.0.4.54",
+  wledPort: 4048,
   wiring: "serpentine",
-  streamFps: 40,
+  streamExposure: 1.25,
+  streamGamma: 1.0,
+  streamChannelOrder: "RGB",
+  streamSaturation: 1.0,
+  streamRedGain: 1.0,
+  streamGreenGain: 1.0,
+  streamBlueGain: 1.0,
+  streamFps: 60,
 };
